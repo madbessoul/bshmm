@@ -1,7 +1,8 @@
 import numpy as np
 
 def stoch_check(matrix):
-# Function to check if a matrix is row-stochastic
+# Function to check if a matrix is row-stochastic (rows summing to 1)
+# 
 	
 	if matrix.ndim == 1:
 		ssum = np.sum(matrix)
