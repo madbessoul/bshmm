@@ -1,4 +1,6 @@
 import numpy as np
+from scipy import stats
+import ipdb
 
 def stoch_check(matrix):
 # Function to check if a matrix is row-stochastic (rows summing to 1)
@@ -10,11 +12,11 @@ def stoch_check(matrix):
 	else:
 		# Sum of rows
 		ssum = np.sum(matrix, 1)
-		M = np.size(matrix, 1)
-
+		M = np.size(matrix, 0)
 	# Vector of [1, 1, ..., 1], M times, M being the number of rows	
 	ones = np.array([1] * M)
-	
+
+
 	# Since we're dealing with float point values, it's not safe to test for equality,
 	# in fact, the value and their machine representation are not always the same
 	# Instead, we make sur the difference is "close enough" to 0
@@ -26,7 +28,7 @@ def stoch_check(matrix):
 
 class Hmm:
 	def __init__(self, states, observations, initial, transition, emission):
-	# Class constructor with HMM starting parameters
+	# Class constructor with HMM arting parameters
 	# N States
 	# M Obsevations
 	# Initial probability distribution with N values
@@ -88,26 +90,40 @@ class Hmm:
 			print "New initial vector must be stochastic (row must sum to 1)"
 
 
-	def _forward(self, states, observations, transition, emission):
-	# Compute P(observation sequence | state sequence)
-	# Run the forward algorithm and calculate the alpha variable
+	def binomialEmission(self, counts, coverage, t):
+		'''
+		Compute the binomial emission matrix at a time t
+		The Binomial emission matrix is defined as follows:
+		B(obs, state) = P(obs_i|state_i)
+					  = Binomial(n = c_counts, p = methylation, k = coverage)
+		'''
+	
+		e = stats.distributions.binom.pmf(counts[t], coverage[t], self.states)
+		return e / sum(e)
 
-		pass
+
+	def _forward(self, obs):
+		'''
+		Compute P(observation sequence | state sequence)
+	   	the forward algorithm and calculate the alpha variable
+		'''
+		T = len(obs)
 
 		# Initialisation step
-		alpha = emission * observations
+		alpha = np.zeros([self.N, T])
+		alpha[:,0] = self.initial * self.emission[:,self.observations[0]]
+
 
 		# Induction step (recursion)
 
 
 		# Termination
 		
-		# return alpha
-
 
 	def _backward(self):
-	# Run the backward algorithm and calculate the beta variable
-	
+		'''
+		Run the backward algorithm and calculate the beta variable
+		'''
 		pass
 		# return beta
 
