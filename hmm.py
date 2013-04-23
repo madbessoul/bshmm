@@ -90,7 +90,7 @@ class Hmm:
 			print "New initial vector must be stochastic (row must sum to 1)"
 
 
-	def binomialEmission(self, counts, coverage, t):
+	def _binomialEmission(self, obs, coverage, t):
 		'''
 		Compute the binomial emission matrix at a time t
 		The Binomial emission matrix is defined as follows:
@@ -98,26 +98,49 @@ class Hmm:
 					  = Binomial(n = c_counts, p = methylation, k = coverage)
 		'''
 	
-		e = stats.distributions.binom.pmf(counts[t], coverage[t], self.states)
+		e = stats.distributions.binom.pmf(obs[t], coverage[t], self.states)
+
+		# The return vector must be stochastic, so we divide by the sum of its
+		# elements 
 		return e / sum(e)
 
 
-	def _forward(self, obs):
+	def _forward(self, obs, coverage):
 		'''
 		Compute P(observation sequence | state sequence)
-	   	the forward algorithm and calculate the alpha variable
+	   	the forward algorithm and calculate the alpha variable as well as 
+	   	the observed sequences probability
 		'''
+
+		# Variable initializaiton 
 		T = len(obs)
+		scale = np.zeros([T], float)
+		alpha = np.zeros([self.N, T], float)
 
-		# Initialisation step
-		alpha = np.zeros([self.N, T])
-		alpha[:,0] = self.initial * self.emission[:,self.observations[0]]
+		### Initialisation step
+		# c is the normalization value
+		# Since we can't use log values to avoid underflow during computation, 
+		# we normalize the probabilities using a scaling value while keeping 
+		# the recursion coherent 
 
+		e0 = self._binomialEmission(obs, coverage, 0)
+		alpha[:,0] = self.initial * e0
+		
+		scale[0] = 1. / np.sum(alpha[:,0])
+		alpha[:,0] *= scale[0]
 
-		# Induction step (recursion)
+		### Induction step (recursion)
+		for t in range(1, T):
+	
+			e = self._binomialEmission(obs, coverage, t)
+			alpha[:,t] = np.dot(alpha[:,t-1], self.transition) * e
 
+			scale[t] = 1. / np.sum(alpha[:,t])
+			alpha[:,t] *= scale[t]
 
-		# Termination
+		obs_log_prob = -np.sum(np.log(scale))
+		
+		return obs_log_prob, alpha
 		
 
 	def _backward(self):
