@@ -110,6 +110,8 @@ class Hmm:
 		Compute P(observation sequence | state sequence)
 	   	the forward algorithm and calculate the alpha variable as well as 
 	   	the observed sequences probability
+	  	Returns the alpha variable, the log probability of the observed
+	  	sequence as well as as the scaling factor (used in the backward alg.)
 		'''
 
 		# Variable initializaiton 
@@ -130,26 +132,41 @@ class Hmm:
 		alpha[:,0] *= scale[0]
 
 		### Induction step (recursion)
-		for t in range(1, T):
+		for t in xrange(1, T):
 	
 			e = self._binomialEmission(obs, coverage, t)
 			alpha[:,t] = np.dot(alpha[:,t-1], self.transition) * e
+
 
 			scale[t] = 1. / np.sum(alpha[:,t])
 			alpha[:,t] *= scale[t]
 
 		obs_log_prob = -np.sum(np.log(scale))
-		
-		return obs_log_prob, alpha
+		return obs_log_prob, alpha, scale
 		
 
-	def _backward(self):
+	def _backward(self, obs, coverage, scale):
 		'''
 		Run the backward algorithm and calculate the beta variable
 		'''
-		pass
-		# return beta
 
+		T = len(obs) 
+		beta = np.zeros([self.N, T])
+
+		# Initialization
+		beta[:,T-1] = 1.0
+		
+		# Induction 
+		# Reverse iteration from T-1 to 0
+		for t in reversed(xrange(T-1)):
+
+			e = self._binomialEmission(obs, coverage, t+1)
+			beta[:,t] = np.dot(self.transition, (e * beta[:,t+1]))
+
+			# Scaling using the forward algorithm scaling factors
+			beta[:,t] *= scale[t]
+		# return beta
+		return beta
 
 	def _baumWelch(self, train_set):
 	# Run the Baum-Welch algorithm to estimate new paramters based on 
