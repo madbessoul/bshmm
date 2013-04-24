@@ -2,6 +2,8 @@ import numpy as np
 from scipy import stats
 import ipdb
 
+
+# HELPER FUNCTIONS
 def stoch_check(matrix):
 # Function to check if a matrix is row-stochastic (rows summing to 1)
 # 
@@ -27,7 +29,7 @@ def stoch_check(matrix):
 
 
 class Hmm:
-	def __init__(self, states, observations, initial, transition, emission):
+	def __init__(self, states, observations, initial, transition):
 	# Class constructor with HMM arting parameters
 	# N States
 	# M Obsevations
@@ -43,10 +45,6 @@ class Hmm:
 		else:
 			print "Initial matrix must be stochastic (rows must sum to 1)"
 
-		if stoch_check(emission):
-			self.emission = emission
-		else:
-			print "Emission matrix must be stochastic (rows must sum to 1)"
 
 		if stoch_check(transition):
 			self.transition = transition
@@ -70,14 +68,14 @@ class Hmm:
 			print "Transition matrix mut be stochastic (row must sum to 1)"
 
 
-	def updateEmission(self, new_emission):
-	# Set a new emission matrix for the model
+	# def updateEmission(self, new_emission):
+	# # Set a new emission matrix for the model
 		
-		new_emission = np.array(new_emission)
-		if stoch_check(new_emission):
-			self.emission = new_emission
-		else:
-			print "New emission matrix must be stochastic (rows must sum to 1)"
+	# 	new_emission = np.array(new_emission)
+	# 	if stoch_check(new_emission):
+	# 		self.emission = new_emission
+	# 	else:
+	# 		print "New emission matrix must be stochastic (rows must sum to 1)"
 
 
 	def updateInitial(self, new_initial):
@@ -144,6 +142,13 @@ class Hmm:
 		obs_log_prob = -np.sum(np.log(scale))
 		return obs_log_prob, alpha, scale
 		
+	def _ksi():
+		pass
+
+
+	def _gamma():
+		pass
+
 
 	def _backward(self, obs, coverage, scale):
 		'''
@@ -155,6 +160,7 @@ class Hmm:
 
 		# Initialization
 		beta[:,T-1] = 1.0
+		beta[:,T-1] *= scale[T-1]
 		
 		# Induction 
 		# Reverse iteration from T-1 to 0
@@ -165,7 +171,7 @@ class Hmm:
 
 			# Scaling using the forward algorithm scaling factors
 			beta[:,t] *= scale[t]
-		# return beta
+
 		return beta
 
 	def _baumWelch(self, train_set):
