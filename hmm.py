@@ -139,15 +139,9 @@ class Hmm:
 			scale[t] = 1. / np.sum(alpha[:,t])
 			alpha[:,t] *= scale[t]
 
-		obs_log_prob = -np.sum(np.log(scale))
+		obs_log_prob = - np.sum(np.log(scale))
 		return obs_log_prob, alpha, scale
 		
-	def _ksi():
-		pass
-
-
-	def _gamma():
-		pass
 
 
 	def _backward(self, obs, coverage, scale):
@@ -171,18 +165,46 @@ class Hmm:
 
 			# Scaling using the forward algorithm scaling factors
 			beta[:,t] *= scale[t]
+			ipdb.set_trace()
 
 		return beta
+
+
+	def _ksi(self, obs, coverage, alpha, beta):
+	# Calculate ksis. 
+	# Ksi is a N x N x T-1 matrix
+
+		T = len(obs)
+		ksi = np.zeros([self.N, self.N, T-1])
+
+		for t in xrange(T-1):
+			for i in xrange(self.N):
+				e = self._binomialEmission(obs, coverage, t+1)
+				ksi[i, :, t] = alpha[i, t] * \
+					self.transition[i, :] * \
+					e * \
+					beta[:, t+1]
+
+		return ksi
+
+
+	def _gamma(self, alpha, beta):
+	# Compute gammas
+		
+		gamma = alpha * beta 
+		return gamma
+
 
 	def _baumWelch(self, train_set):
 	# Run the Baum-Welch algorithm to estimate new paramters based on 
 	# a set of obsercations
 	
-		pass
+		
 		# alpha = _forward()
 		# beta = _backward()
-		# Compute xi and gamma
-		# Estimate new parameters (transition, initial)
+		# Compute ksi and gamma
+		# Estimate new transition matrix
+		return log_like, opt_trans
 
 
 	def _viterbi(self, pred_set):
@@ -203,4 +225,8 @@ class Hmm:
 		# updateTransition(train_transition)
 		# updateInitial(train_initial)
 
+	def decode(self, obs):
+	# Run the Viterbi algorithm to find the most probable state path for a given
+	# set of observations
+		pass
 
