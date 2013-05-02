@@ -1,9 +1,10 @@
 import numpy as np
+import sys
 from scipy import stats
 import ipdb
 
-
 # HELPER FUNCTIONS
+# 
 def stoch_check(matrix):
 # Function to check if a matrix is row-stochastic (rows summing to 1)
 # 
@@ -19,7 +20,8 @@ def stoch_check(matrix):
 	ones = np.array([1] * M)
 
 
-	# Since we're dealing with float point values, it's not safe to test for equality,
+	# Since we're dealing with float point values, 
+	# it's not safe to test for equality,
 	# in fact, the value and their machine representation are not always the same
 	# Instead, we make sur the difference is "close enough" to 0
 	if (ones - ssum < 10e-8).all():
@@ -55,9 +57,6 @@ class Hmm:
 		self.M = len(observations)
 
 
-	def updateState(self, new_states):
-		self.states = new_states
-
 	def updateTransition(self, new_transition):
 	# Set a new transition matrix for the model
 
@@ -80,6 +79,7 @@ class Hmm:
 
 	def updateInitial(self, new_initial):
 	# Set a new initial distribution for the model
+	# Also used by the Baum Welch algorithm to estimate optimal param.
 	
 		new_initial = np.array(new_initial)
 		if stoch_check(new_initial):
@@ -89,12 +89,11 @@ class Hmm:
 
 
 	def _binomialEmission(self, obs, coverage, t):
-		'''
-		Compute the binomial emission matrix at a time t
-		The Binomial emission matrix is defined as follows:
-		B(obs, state) = P(obs_i|state_i)
-					  = Binomial(n = c_counts, p = methylation, k = coverage)
-		'''
+	# Compute the binomial emission matrix at a time t
+	# The Binomial emission matrix is defined as follows:
+	# B(obs, state) = P(obs_i|state_i)
+	# 			  = Binomial(n = c_counts, p = methylation, k = coverage)
+
 	
 		e = stats.distributions.binom.pmf(obs[t], coverage[t], self.states)
 
@@ -104,13 +103,11 @@ class Hmm:
 
 
 	def _forward(self, obs, coverage):
-		'''
-		Compute P(observation sequence | state sequence)
-	   	the forward algorithm and calculate the alpha variable as well as 
-	   	the observed sequences probability
-	  	Returns the alpha variable, the log probability of the observed
-	  	sequence as well as as the scaling factor (used in the backward alg.)
-		'''
+	# Compute P(observation sequence | state sequence)
+	# the forward algorithm and calculate the alpha variable as well as 
+	# the observed sequences probability
+	# Returns the alpha variable, the log probability of the observed
+	# sequence as well as as the scaling factor (used in the backward alg.)
 
 		# Variable initializaiton 
 		T = len(obs)
@@ -165,7 +162,6 @@ class Hmm:
 
 			# Scaling using the forward algorithm scaling factors
 			beta[:,t] *= scale[t]
-			ipdb.set_trace()
 
 		return beta
 
@@ -192,6 +188,7 @@ class Hmm:
 	# Compute gammas
 		
 		gamma = alpha * beta 
+		gamma /= gamma.sum(0)
 		return gamma
 
 
@@ -199,13 +196,45 @@ class Hmm:
 	# Run the Baum-Welch algorithm to estimate new paramters based on 
 	# a set of obsercations
 	
+		counts = train_set['count']
+		coverage = train_set['cov']
+		T = len(counts)
 		
-		# alpha = _forward()
-		# beta = _backward()
-		# Compute ksi and gamma
-		# Estimate new transition matrix
-		return log_like, opt_trans
+		log_obs, alpha, scale = self._forward(counts, coverage)
+		beta = self._backward(counts, coverage, scale)
+		ksi = self._ksi(counts, coverage, alpha, beta)
+		gamma = self._gamma(alpha, beta)
 
+		# Expectation of being in state i
+		expect_si_all = np.zeros([self.N], float)
+
+		# Expectation of being in state i until T-1
+		expect_si_all_TM1 = np.zeros([self.N], float)
+
+		# Exctation of jumping from state i to state j
+  		expect_si_sj_all = np.zeros([self.N, self.N], float)
+
+  		# Exctation of jumping from state i to state j until T-1
+  		expect_si_sj_all_TM1 = np.zeros([self.N, self.N], float)
+
+
+  		expect_si_all += gamma.sum(1)
+  		expect_si_all_TM1 += gamma[:, :T-1].sum(1)
+		expect_si_sj_all += ksi.sum(2)
+		expect_si_sj_all_TM1 += ksi[:, :, :T-1].sum(2) 
+
+  		### Update transition matrix
+  		new_transition = np.zeros([self.N, self.N])
+  		for i in xrange(self.N):
+  			new_transition[i,:] = expect_si_sj_all_TM1[i,:] / \
+  								expect_si_all_TM1[i]
+  			new_transition[i,:] /= sum(new_transition[i,:])
+  			# ipdb.set_trace()
+
+  		self.updateTransition(new_transition)
+
+  		# Return log likelihood
+		return log_obs
 
 	def _viterbi(self, pred_set):
 	# Find the most probable hidden state sequence using the Viterbi algorithm
@@ -214,19 +243,59 @@ class Hmm:
 		# return path, path_like
 
 
-	def train(self, tain_set, maxiter, threshold):
-	# Train the model using the Baum-Welch algorithm and update the model's
-	# current parameters based on a set training observation, a max number of 
-	# iteration and a threshold for the likelihood difference between new and
-	# current model
-	
-		pass
-		# _baumwelch(train_set)
-		# updateTransition(train_transition)
-		# updateInitial(train_initial)
+	def train(self, train_set, maxiter=30, threshold=10e-10, graph=True):
+		'''
+		Train the model using the Baum-Welch algorithm and update the model's
+		current parameters based on a set training observation, a max number of 
+		iteration and a threshold for the likelihood difference between new and
+		current model
+			- maxiter : 	maximum number of EM iterations. Default = 100
+			- threshold : minimum value for log-likehood difference between two
+						iterations. If lower, the EM stops. Default = 10e-10
+			- graph : 	plot the LL evolution at the end of the estimation. 
+						default = True  
+		'''
+
+		LLs = []
+		for i in xrange(maxiter):
+			# Print current EM iteration
+			sys.stdout.write("\r   EM Iteration : %i/%i" % (i+1, maxiter))
+			sys.stdout.flush()
+
+			# Run Baum-Welch and store the log-likelihood prob
+			LL = self._baumWelch(train_set)
+			LLs.append(LL)
+
+			# Stop if the LL plateau is reached
+			if (i > 2):
+				if (LLs[-1] - LLs[-2] < threshold):
+					print '\nOops, log-likelihood plateau, training stopped'
+					break
+
+		# Plot LL evolution for each iteration
+		if graph is True:
+			from pylab import plot, title, show
+			plot(LLs, '+')
+			title('Log-likelihood evolution during training')
+			show()
 
 	def decode(self, obs):
-	# Run the Viterbi algorithm to find the most probable state path for a given
-	# set of observations
+		'''
+		Run the Viterbi algorithm to find the most probable state path for a 
+		given set of observations
+		'''
 		pass
+
+	def generativeModel(self, seq_length=1000):
+		'''
+		Use the HMM as a generative model to sample data using the given 
+		transition and initial matrices
+		'''
+
+		pass
+
+
+
+
+
 
