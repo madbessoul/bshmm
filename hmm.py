@@ -286,13 +286,39 @@ class Hmm:
 		'''
 		pass
 
-	def generativeModel(self, seq_length=1000):
+	def generateData(self, coverage, seq_length=1000):
 		'''
-		Use the HMM as a generative model to sample data using the given 
-		transition and initial matrices
+		Use the HMM as a generative model to sample data using the model
+		parameters
 		'''
 
-		pass
+		counts = np.zeros([seq_length])
+		gen_path = np.zeros([seq_length])
+
+		# Sample initial state and initial observation
+		gen_path[0] = np.random.choice(self.states, p=self.initial)
+		counts[0] = np.random.binomial(coverage[0], gen_path[0], size=1)
+
+		# Sample the state paths and the corresponding observations
+		for i in xrange(1, seq_length):
+		
+			curr_trans_dist = np.array(self.transition[
+			np.where(
+				self.states == gen_path[i-1]
+				)[0][0]
+			, :], dtype=np.float32)
+
+			# Sample the current state from the adequate transition matrix
+			# line distribution
+			gen_path[i] = np.random.choice(self.states, p=curr_trans_dist)
+
+			# Sample the observation using a binomial distribution
+			counts[i] = np.random.binomial(coverage[1], gen_path[i], 1)
+
+		return gen_path, counts
+
+
+
 
 
 
