@@ -1,5 +1,5 @@
 import numpy as np
-import sys
+import sys, time
 from scipy import stats
 import ipdb
 
@@ -255,15 +255,18 @@ class Hmm:
 		# Induction
 		for t in xrange(1,T):
 
-			e = self._binomialEmission(counts, coverage, t)
+			e_t = self._binomialEmission(counts, coverage, t)
 			tmp = max_path_prob[:, t-1] + np.log(self.transition)
-			max_path_prob[:, t] = tmp.max(1) + e
+			max_path_prob[:, t] = tmp.max(1) + np.log(e_t)
 			track_path[:, t] = tmp.argmax(1)
 
-		# Calculate the state sequence
+	
 		best_path = [np.argmax(max_path_prob[:, T-1])]
+
+		# Backtracikng
 		for t in reversed(xrange(T-1)):
 			best_path.insert(0, track_path[best_path[0], t+1])
+			# ipdb.set_trace()
 
 		return best_path
 
@@ -280,6 +283,8 @@ class Hmm:
 						default = True  
 		'''
 
+		print " --- Parameter reestimation : EM ---"
+		start  = time.time()
 		LLs = []
 		for i in xrange(maxiter):
 			# Print current EM iteration
@@ -295,6 +300,8 @@ class Hmm:
 				if (LLs[-1] - LLs[-2] < threshold):
 					print '\nOops, log-likelihood plateau, training stopped'
 					break
+		stop = time.time()
+		print "\t... done in %d secs" % (stop - start)
 
 		# Plot LL evolution for each iteration
 		if graph is True:
@@ -302,13 +309,20 @@ class Hmm:
 			plot(LLs, '+')
 			title('Log-likelihood evolution during training')
 			show()
-
+		return LL[-1], LL
+ 
 	def decode(self, obs):
 		'''
 		Run the Viterbi algorithm to find the most probable state path for a 
 		given set of observations
 		'''
+
+		print " --- Decoding using Viterbi algorithm ---"
+		start_decode = time.time()
 		best_path = self._viterbi(obs)
+		end_decode = time.time()
+		print "\t... done in %d seconds" % (end_decode - start_decode)
+
 		return best_path
 
 	def generateData(self, coverage, seq_length=1000):
@@ -324,6 +338,8 @@ class Hmm:
 		gen_path[0] = np.random.choice(self.states, p=self.initial)
 		counts[0] = np.random.binomial(coverage[0], gen_path[0], size=1)
 
+		print ' --- Simulating model based data --- '
+		simu_start = time.time()
 		# Sample the state paths and the corresponding observations
 		for i in xrange(1, seq_length):
 		
@@ -339,7 +355,8 @@ class Hmm:
 
 			# Sample the observation using a binomial distribution
 			counts[i] = np.random.binomial(coverage[1], gen_path[i], 1)
-
+		simu_end = time.time()
+		print "\t... done in %d secs" % (simu_end - simu_start)
 		return gen_path, counts
 
 
