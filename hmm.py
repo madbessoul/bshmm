@@ -239,9 +239,33 @@ class Hmm:
 	def _viterbi(self, pred_set):
 	# Find the most probable hidden state sequence using the Viterbi algorithm
 	
-		pass
-		# return path, path_like
+		counts = pred_set['count']
+		coverage = pred_set['cov']
+		T = len(pred_set)
 
+		# Initialization
+		e0 = self._binomialEmission(counts, coverage, 0)
+
+
+		max_path_prob = np.zeros([self.N, T], float)
+		max_path_prob[:,0] = np.log(self.initial) + np.log(e0)
+
+		track_path = np.zeros([self.N, T], int)
+
+		# Induction
+		for t in xrange(1,T):
+
+			e = self._binomialEmission(counts, coverage, t)
+			tmp = max_path_prob[:, t-1] + np.log(self.transition)
+			max_path_prob[:, t] = tmp.max(1) + e
+			track_path[:, t] = tmp.argmax(1)
+
+		# Calculate the state sequence
+		best_path = [np.argmax(max_path_prob[:, T-1])]
+		for t in reversed(xrange(T-1)):
+			best_path.insert(0, track_path[best_path[0], t+1])
+
+		return best_path
 
 	def train(self, train_set, maxiter=30, threshold=10e-10, graph=True):
 		'''
@@ -284,12 +308,13 @@ class Hmm:
 		Run the Viterbi algorithm to find the most probable state path for a 
 		given set of observations
 		'''
-		pass
+		best_path = self._viterbi(obs)
+		return best_path
 
 	def generateData(self, coverage, seq_length=1000):
 		'''
-		Use the HMM as a generative model to sample data using the model
-		parameters
+		Use the HMM as a generative model to simulate data using the model
+		given parameters
 		'''
 
 		counts = np.zeros([seq_length])
