@@ -238,37 +238,37 @@ class Hmm:
 
 	def _viterbi(self, pred_set):
 	# Find the most probable hidden state sequence using the Viterbi algorithm
-	
-		counts = pred_set['count']
-		coverage = pred_set['cov']
 		T = len(pred_set)
 
+		counts = pred_set['count']
+		coverage = np.ones([T]) * 100
+
+		# The notations (ie the variable names) correspond the those used in 
+		# the famous Rabiner article (A Tutorial on Hidden Markov Models and 
+		# Selected Applications in Speech Recognition, Feb. 1989)
+		
 		# Initialization
+		
 		e0 = self._binomialEmission(counts, coverage, 0)
 
+		delta = np.zeros([self.N, T], float)
+		delta[:,0] = np.log(self.initial) + np.log(e0)
 
-		max_path_prob = np.zeros([self.N, T], float)
-		max_path_prob[:,0] = np.log(self.initial) + np.log(e0)
-
-		track_path = np.zeros([self.N, T], int)
-
-		# Induction
+		psi = np.zeros([self.N, T], int)
+		# Recursion
 		for t in xrange(1,T):
 
 			e_t = self._binomialEmission(counts, coverage, t)
-			tmp = max_path_prob[:, t-1] + np.log(self.transition)
-			max_path_prob[:, t] = tmp.max(1) + np.log(e_t)
-			track_path[:, t] = tmp.argmax(1)
+			tmp = delta[:, t-1] + np.log(self.transition)
+			delta[:, t] = tmp.max(1) + np.log(e_t)
+			psi[:, t] = tmp.argmax(1)
 
-	
-		best_path = [np.argmax(max_path_prob[:, T-1])]
-
-		# Backtracikng
+		# Backtracking
+		q_star = [np.argmax(delta[:, T-1])]
 		for t in reversed(xrange(T-1)):
-			best_path.insert(0, track_path[best_path[0], t+1])
-			# ipdb.set_trace()
+			q_star.insert(0, psi[q_star[0], t+1])
 
-		return best_path
+		return (q_star, delta, psi)
 
 	def train(self, train_set, maxiter=30, threshold=10e-10, graph=True):
 		'''
@@ -319,11 +319,11 @@ class Hmm:
 
 		print " --- Decoding using Viterbi algorithm ---"
 		start_decode = time.time()
-		best_path = self._viterbi(obs)
+		best_path, delta, psi = self._viterbi(obs)
 		end_decode = time.time()
 		print "\t... done in %d seconds" % (end_decode - start_decode)
 
-		return best_path
+		return (best_path, delta, psi)
 
 	def generateData(self, coverage, seq_length=1000):
 		'''
@@ -354,7 +354,7 @@ class Hmm:
 			gen_path[i] = np.random.choice(self.states, p=curr_trans_dist)
 
 			# Sample the observation using a binomial distribution
-			counts[i] = np.random.binomial(coverage[1], gen_path[i], 1)
+			counts[i] = np.random.binomial(coverage[i], gen_path[i], 1)
 		simu_end = time.time()
 		print "\t... done in %d secs" % (simu_end - simu_start)
 		return gen_path, counts
