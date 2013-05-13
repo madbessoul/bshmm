@@ -30,6 +30,7 @@ def stoch_check(matrix):
 		return False
 
 
+
 class Hmm:
 	def __init__(self, states, observations, initial, transition):
 	# Class constructor with HMM arting parameters
@@ -56,6 +57,19 @@ class Hmm:
 		self.N = len(states)
 		self.M = len(observations)
 
+	def kl_divergence(self, P, Q):
+	# Compute the Kullback-Leibler divergence for two distributions P and Q∏
+		
+		mu_P = np.linalg.matrix_power(P, 1000)[0,:]
+		Dkl = 0
+		N, M = P.shape
+		for i in xrange(N):
+			for j in xrange(M):
+				# ipdb.set_trace()
+				# Dkl += P[i, j] * (np.log(P[i,j] / np.log(Q[i,j])))
+				fact = P[i,j] * mu_P[i]
+				Dkl += fact*(np.log2(P[i,j]) / np.log2(Q[i,j]))
+		return Dkl
 
 	def updateTransition(self, new_transition):
 	# Set a new transition matrix for the model
@@ -324,6 +338,12 @@ class Hmm:
 		print "\t... done in %d seconds" % (end_decode - start_decode)
 
 		return (best_path, delta, psi)
+
+	def posteriorDecode(self, obs):
+	# Find the most probable hidden state sequence using the posterior probability
+	# and the forward-backward algorithm
+		pass
+
 
 	def generateData(self, coverage, seq_length=1000):
 		'''
