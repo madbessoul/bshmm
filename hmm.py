@@ -30,7 +30,6 @@ def stoch_check(matrix):
 		return False
 
 
-
 class Hmm:
 	def __init__(self, states, observations, initial, transition):
 	# Class constructor with HMM arting parameters
@@ -58,9 +57,13 @@ class Hmm:
 		self.M = len(observations)
 
 	def kl_divergence(self, P, Q):
-	# Compute the Kullback-Leibler divergence for two distributions P and Q∏
+	# Compute the Kullback-Leibler divergence for two distributions P and Q
 		
-		mu_P = np.linalg.matrix_power(P, 1000)[0,:]
+		# Calculate the stationary distribution mu using eigen decomposition
+		S,U = np.linalg.eig(P.T)
+		mu_P = np.array(U[:,np.where(np.abs(S-1.) < 1e-8)[0][0]].flat)
+		mu_P = mu_P / np.sum(mu_P)
+		
 		Dkl = 0
 		N, M = P.shape
 		for i in xrange(N):
@@ -109,11 +112,12 @@ class Hmm:
 	# 			  = Binomial(n = c_counts, p = methylation, k = coverage)
 
 	
-		e = stats.distributions.binom.pmf(obs[t], coverage[t], self.states)
+		e = (stats.distributions.binom.pmf(obs[t], coverage[t], self.states))
+		e *= 1. / sum(e)
 
 		# The return vector must be stochastic, so we divide by the sum of its
 		# elements 
-		return e / sum(e)
+		return e
 
 
 	def _forward(self, obs, coverage):
@@ -139,7 +143,6 @@ class Hmm:
 		
 		scale[0] = 1. / np.sum(alpha[:,0])
 		alpha[:,0] *= scale[0]
-
 		### Induction step (recursion)
 		for t in xrange(1, T):
 	
@@ -151,6 +154,8 @@ class Hmm:
 			alpha[:,t] *= scale[t]
 
 		obs_log_prob = - np.sum(np.log(scale))
+
+
 		return obs_log_prob, alpha, scale
 		
 
@@ -325,7 +330,7 @@ class Hmm:
 			show()
 		return LL[-1], LL
  
-	def decode(self, obs):
+	def viterbiDecode(self, obs):
 		'''
 		Run the Viterbi algorithm to find the most probable state path for a 
 		given set of observations
@@ -339,10 +344,24 @@ class Hmm:
 
 		return (best_path, delta, psi)
 
-	def posteriorDecode(self, obs):
+	def posteriorDecode(self, pred_set):
 	# Find the most probable hidden state sequence using the posterior probability
 	# and the forward-backward algorithm
-		pass
+		
+		counts = pred_set['count']
+		coverage = pred_set['cov']
+		T = len(counts)
+		
+		log_obs, alpha, scale = self._forward(counts, coverage)
+		beta = self._backward(counts, coverage, scale)
+
+		Pkx = np.zeros([self.N, T])
+		Px = sum(alpha[:,T-1])
+		
+		for t in xrange(T-1):
+			Pkx[:,t] = (1. / Px) * alpha[:,t] * beta[:,t]
+		best_path = np.argmax(Pkx, 0)
+		return best_path
 
 
 	def generateData(self, coverage, seq_length=1000):
@@ -378,12 +397,3 @@ class Hmm:
 		simu_end = time.time()
 		print "\t... done in %d secs" % (simu_end - simu_start)
 		return gen_path, counts
-
-
-
-
-
-
-
-
-
