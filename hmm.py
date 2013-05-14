@@ -31,7 +31,7 @@ def stoch_check(matrix):
 
 
 class Hmm:
-	def __init__(self, states, observations, initial, transition):
+	def __init__(self, states, initial, transition):
 	# Class constructor with HMM arting parameters
 	# N States
 	# M Obsevations
@@ -40,7 +40,6 @@ class Hmm:
 	# N x M emission matrix
 	
 		self.states = states
-		self.observations = observations
 
 		if stoch_check(initial):
 			self.initial = initial
@@ -54,7 +53,6 @@ class Hmm:
 			print "Transition matrix must be stochastic (rows must sum to 1)"
 
 		self.N = len(states)
-		self.M = len(observations)
 
 	def kl_divergence(self, P, Q):
 	# Compute the Kullback-Leibler divergence for two distributions P and Q
@@ -321,7 +319,7 @@ class Hmm:
 					print '\nOops, log-likelihood plateau, training stopped'
 					break
 		stop = time.time()
-		print "\t... done in %d secs" % (stop - start)
+		print "\t... done in %.1f secs" % (stop - start)
 
 		# Plot LL evolution for each iteration
 		if graph is True:
@@ -341,7 +339,7 @@ class Hmm:
 		start_decode = time.time()
 		best_path_index, delta, psi = self._viterbi(obs)
 		end_decode = time.time()
-		print "\t... done in %d seconds" % (end_decode - start_decode)
+		print "\t... done in %.1f seconds" % (end_decode - start_decode)
 
 		best_path = [self.states[i] for i in best_path_index]
 		return (best_path, delta, psi)
@@ -372,7 +370,7 @@ class Hmm:
 		for t in xrange(T-1):
 			# ipdb.set_trace()
 			Pkx[:,t] = (1. / Px) * alpha[:,t] * beta[:,t]
-			Pkx[:,t] *= 1. / sum(Pkx[:,t])
+			# Pkx[:,t] *= 1. / sum(Pkx[:,t])
 
 		# Find the argmax of the posterior probability and return
 		# the best methylation level sequence taken from the 
@@ -381,8 +379,8 @@ class Hmm:
 		best_path = [self.states[i] for i in np.argmax(Pkx, 0)]
 
 		# TIMESTAMP
-		post_decore_stop = time.time()
-		print '\t...done in %d secs' % (post_decore_stop - post_decode_start)
+		post_decode_stop = time.time()
+		print '\t...done in %.1f secs' % (post_decode_stop - post_decode_start)
 
 		return best_path
 
@@ -418,5 +416,5 @@ class Hmm:
 			# Sample the observation using a binomial distribution
 			counts[i] = np.random.binomial(coverage[i], gen_path[i], 1)
 		simu_end = time.time()
-		print "\t... done in %d secs" % (simu_end - simu_start)
+		print "\t...done in %.1f secs" % (simu_end - simu_start)
 		return gen_path, counts
