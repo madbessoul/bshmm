@@ -71,7 +71,7 @@ class Hmm:
 				# ipdb.set_trace()
 				# Dkl += P[i, j] * (np.log(P[i,j] / np.log(Q[i,j])))
 				fact = P[i,j] * mu_P[i]
-				Dkl += fact*(np.log2(P[i,j]) / np.log2(Q[i,j]))
+				Dkl += fact*(np.log2(P[i,j]/Q[i,j]))
 		return Dkl
 
 	def updateTransition(self, new_transition):
@@ -181,6 +181,7 @@ class Hmm:
 
 			# Scaling using the forward algorithm scaling factors
 			beta[:,t] *= scale[t]
+			beta[:,t] *= 1. / sum(beta[:,t])
 
 		return beta
 
@@ -302,7 +303,7 @@ class Hmm:
 						default = True  
 		'''
 
-		print " --- Parameter reestimation : EM ---"
+		print " --- Parameter reestimation ---"
 		start  = time.time()
 		LLs = []
 		for i in xrange(maxiter):
@@ -338,29 +339,51 @@ class Hmm:
 
 		print " --- Decoding using Viterbi algorithm ---"
 		start_decode = time.time()
-		best_path, delta, psi = self._viterbi(obs)
+		best_path_index, delta, psi = self._viterbi(obs)
 		end_decode = time.time()
 		print "\t... done in %d seconds" % (end_decode - start_decode)
 
+		best_path = [self.states[i] for i in best_path_index]
 		return (best_path, delta, psi)
 
 	def posteriorDecode(self, pred_set):
-	# Find the most probable hidden state sequence using the posterior probability
-	# and the forward-backward algorithm
+		'''
+		Find the most probable hidden state sequence using the posterior probability
+		and the forward-backward 
+		'''
 		
 		counts = pred_set['count']
 		coverage = pred_set['cov']
 		T = len(counts)
-		
+
+		# TIMESTAMP
+		print ' --- Posterior decoding ---'
+		post_decode_start = time.time()
+
 		log_obs, alpha, scale = self._forward(counts, coverage)
 		beta = self._backward(counts, coverage, scale)
 
 		Pkx = np.zeros([self.N, T])
 		Px = sum(alpha[:,T-1])
 		
+		# Compute posterior probabilities alpha(t) * beta(t) * 1/P(x)
+		# for each position
+
 		for t in xrange(T-1):
+			# ipdb.set_trace()
 			Pkx[:,t] = (1. / Px) * alpha[:,t] * beta[:,t]
-		best_path = np.argmax(Pkx, 0)
+			Pkx[:,t] *= 1. / sum(Pkx[:,t])
+
+		# Find the argmax of the posterior probability and return
+		# the best methylation level sequence taken from the 
+		# arrays of states. 
+
+		best_path = [self.states[i] for i in np.argmax(Pkx, 0)]
+
+		# TIMESTAMP
+		post_decore_stop = time.time()
+		print '\t...done in %d secs' % (post_decore_stop - post_decode_start)
+
 		return best_path
 
 
