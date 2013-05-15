@@ -1,6 +1,7 @@
 import numpy as np
 import sys, time
 from scipy import stats
+import scikits.bootstrap as bs
 import ipdb
 
 # HELPER FUNCTIONS
@@ -22,12 +23,23 @@ def stoch_check(matrix):
 
 	# Since we're dealing with float point values, 
 	# it's not safe to test for equality,
-	# in fact, the value and their machine representation are not always the same
-	# Instead, we make sur the difference is "close enough" to 0
+	# in fact, the value and their machine representation are not always 
+	# the same. Instead, we make sur the difference is "close enough" to 0
 	if (ones - ssum < 10e-8).all():
 		return True
 	else:
 		return False
+
+def stationaryDist(matrix):
+# Compute the stationary distribution of a Markov Model based on the 
+# transition matrix. We use eigen decomposition for obvious performance
+# gains.
+
+	S,U = np.linalg.eig(matrix.T)
+	mu = np.array(U[:,np.where(np.abs(S-1.) < 1e-8)[0][0]].flat)
+	mu = mu / np.sum(mu)
+	
+	return mu
 
 
 class Hmm:
@@ -58,16 +70,11 @@ class Hmm:
 	# Compute the Kullback-Leibler divergence for two distributions P and Q
 		
 		# Calculate the stationary distribution mu using eigen decomposition
-		S,U = np.linalg.eig(P.T)
-		mu_P = np.array(U[:,np.where(np.abs(S-1.) < 1e-8)[0][0]].flat)
-		mu_P = mu_P / np.sum(mu_P)
-		
+		mu_P = stationaryDist(P)
 		Dkl = 0
 		N, M = P.shape
 		for i in xrange(N):
 			for j in xrange(M):
-				# ipdb.set_trace()
-				# Dkl += P[i, j] * (np.log(P[i,j] / np.log(Q[i,j])))
 				fact = P[i,j] * mu_P[i]
 				Dkl += fact*(np.log2(P[i,j]/Q[i,j]))
 		return Dkl
@@ -346,8 +353,8 @@ class Hmm:
 
 	def posteriorDecode(self, pred_set):
 		'''
-		Find the most probable hidden state sequence using the posterior probability
-		and the forward-backward 
+		Find the most probable hidden state sequence using the posterior
+		probability and the forward-backward 
 		'''
 		
 		counts = pred_set['count']
@@ -362,6 +369,7 @@ class Hmm:
 		beta = self._backward(counts, coverage, scale)
 
 		Pkx = np.zeros([self.N, T])
+		ci = np.zeros([T])
 		Px = sum(alpha[:,T-1])
 		
 		# Compute posterior probabilities alpha(t) * beta(t) * 1/P(x)
@@ -370,7 +378,13 @@ class Hmm:
 		for t in xrange(T-1):
 			# ipdb.set_trace()
 			Pkx[:,t] = (1. / Px) * alpha[:,t] * beta[:,t]
-			# Pkx[:,t] *= 1. / sum(Pkx[:,t])
+
+			# Normalize posterior probabilities
+			Pkx[:,t] *= 1. / sum(Pkx[:,t])
+
+			# Confidence interval using bootstrap, alpha : .95
+			ci[t] = bs.ci(Pkx[:, t], statfunction=np.max, n_samples=1000)[0]
+
 
 		# Find the argmax of the posterior probability and return
 		# the best methylation level sequence taken from the 
@@ -382,7 +396,7 @@ class Hmm:
 		post_decode_stop = time.time()
 		print '\t...done in %.1f secs' % (post_decode_stop - post_decode_start)
 
-		return best_path
+		return best_path, ci
 
 
 	def generateData(self, coverage, seq_length=1000):
