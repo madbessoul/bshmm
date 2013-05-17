@@ -42,6 +42,26 @@ def stationaryDist(matrix):
 	return mu
 
 
+def conf_interval(array, alpha):
+# Return the confidence intervals
+	best_index = np.argmax(array)
+	best_val = max(array)
+
+	try:
+		ci_max = np.max(np.where(array[best_index:] \
+			>= best_val - alpha))
+	except:
+		ci_max = 0
+
+	try:
+		ci_min = np.min(np.where(array[:best_index] \
+			>= best_val - alpha))
+	except:
+		ci_min = 0
+
+	return ci_max, ci_min
+
+
 class Hmm:
 	def __init__(self, states, initial, transition):
 	# Class constructor with HMM arting parameters
@@ -66,7 +86,7 @@ class Hmm:
 
 		self.N = len(states)
 
-	def kl_divergence(self, P, Q):
+	def _kl_divergence(self, P, Q):
 	# Compute the Kullback-Leibler divergence for two distributions P and Q
 		
 		# Calculate the stationary distribution mu using eigen decomposition
@@ -290,12 +310,13 @@ class Hmm:
 
 		# Backtracking
 		q_star = [np.argmax(delta[:, T-1])]
+		# ipdb.set_trace()
 		for t in reversed(xrange(T-1)):
 			q_star.insert(0, psi[q_star[0], t+1])
 
-		return (q_star, delta, psi)
+		return q_star
 
-	def train(self, train_set, maxiter=30, threshold=10e-10, graph=True):
+	def train(self, train_set, maxiter=30, threshold=10e-10, graph=False):
 		'''
 		Train the model using the Baum-Welch algorithm and update the model's
 		current parameters based on a set training observation, a max number of 
@@ -309,6 +330,9 @@ class Hmm:
 		'''
 
 		print " --- Parameter reestimation ---"
+
+
+		initial_transition = self.transition
 		start  = time.time()
 		LLs = []
 		for i in xrange(maxiter):
@@ -320,21 +344,26 @@ class Hmm:
 			LL = self._baumWelch(train_set)
 			LLs.append(LL)
 
-			# Stop if the LL plateau is reached
-			if (i > 2):
-				if (LLs[-1] - LLs[-2] < threshold):
-					print '\nOops, log-likelihood plateau, training stopped'
-					break
+			# # Stop if the LL plateau is reached
+			# if (i > 2):
+			# 	if (LLs[-1] - LLs[-2] < threshold):
+			# 		print '\nOops, log-likelihood plateau, training stopped'
+			# 		break
 		stop = time.time()
 		print "\t... done in %.1f secs" % (stop - start)
 
 		# Plot LL evolution for each iteration
-		if graph is True:
-			from pylab import plot, title, show
-			plot(LLs, '+')
-			title('Log-likelihood evolution during training')
-			show()
-		return LL[-1], LL
+		# if graph is True:
+		# 	from pylab import plot, title, show
+		# 	plot(LLs, '+')
+		# 	title('Log-likelihood evolution during training')
+		# 	show()
+
+		# Compute the KL divergence between initial transition and estimated
+		# transition
+
+		Dkl = self._kl_divergence(initial_transition, self.transition)
+		return Dkl
  
 	def viterbiDecode(self, obs):
 		'''
@@ -342,14 +371,14 @@ class Hmm:
 		given set of observations
 		'''
 
-		print " --- Decoding using Viterbi algorithm ---"
+		print " --- Viterbi decoding ---"
 		start_decode = time.time()
-		best_path_index, delta, psi = self._viterbi(obs)
+		best_path_index = self._viterbi(obs)
 		end_decode = time.time()
 		print "\t... done in %.1f seconds" % (end_decode - start_decode)
 
 		best_path = [self.states[i] for i in best_path_index]
-		return (best_path, delta, psi)
+		return best_path
 
 	def posteriorDecode(self, pred_set):
 		'''
@@ -369,28 +398,30 @@ class Hmm:
 		beta = self._backward(counts, coverage, scale)
 
 		Pkx = np.zeros([self.N, T])
-		ci = np.zeros([T])
+		ci = np.zeros([2, T])
 		Px = sum(alpha[:,T-1])
 		
 		# Compute posterior probabilities alpha(t) * beta(t) * 1/P(x)
 		# for each position
-
+		ci_alpha = .15
 		for t in xrange(T-1):
-			# ipdb.set_trace()
 			Pkx[:,t] = (1. / Px) * alpha[:,t] * beta[:,t]
 
 			# Normalize posterior probabilities
 			Pkx[:,t] *= 1. / sum(Pkx[:,t])
 
-			# Confidence interval using bootstrap, alpha : .95
-			ci[t] = bs.ci(Pkx[:, t], statfunction=np.max, n_samples=1000)[0]
+			# Confidence interval, alpha = ci_alpha
+			ci[0,t], ci[1,t] = conf_interval(Pkx[:,t], ci_alpha)
 
 
 		# Find the argmax of the posterior probability and return
 		# the best methylation level sequence taken from the 
-		# arrays of states. 
+		# arrays of states. Same for CIs
 
 		best_path = [self.states[i] for i in np.argmax(Pkx, 0)]
+		ci[0,:] = [self.states[i] for i in ci[0,:]]
+		ci[1,:] = [self.states[i] for i in ci[1,:]]
+
 
 		# TIMESTAMP
 		post_decode_stop = time.time()
