@@ -2,7 +2,6 @@ import numpy as np
 import sys
 import time
 from scipy import stats
-import scikits.bootstrap as bs
 import ipdb
 
 # HELPER FUNCTIONS
@@ -88,25 +87,25 @@ def simFloatWindowCoverage(real_cov, seq_length, win_length=100):
     return sampled_cov
 
 
-    def conf_interval(array, alpha):
-    
-        # Return the confidence intervals
-        best_index = np.argmax(array)
-        best_val = max(array)
+def conf_interval(array, alpha):
 
-        try:
-            ci_max = np.max(np.where(array[best_index:] \
-                >= best_val - alpha))
-        except:
-            ci_max = 0
+    # Return the confidence intervals
+    best_index = np.argmax(array)
+    best_val = max(array)
 
-        try:
-            ci_min = np.min(np.where(array[:best_index] \
-                >= best_val - alpha))
-        except:
-            ci_min = 0
+    try:
+        ci_max = np.max(np.where(array[best_index:] \
+            >= best_val - alpha))
+    except:
+        ci_max = 0
 
-        return ci_max, ci_min
+    try:
+        ci_min = np.min(np.where(array[:best_index] \
+            >= best_val - alpha))
+    except:
+        ci_min = 0
+
+    return ci_max, ci_min
 
 
 class Hmm:
@@ -328,40 +327,6 @@ class Hmm:
         # Return log likelihood
         return log_obs
 
-    def _viterbi(self, pred_set):
-    # Find the most probable hidden state sequence using the Viterbi algorithm
-        T = len(pred_set)
-
-        counts = pred_set['count']
-        coverage = np.ones([T]) * 100
-
-        # The notations (ie the variable names) correspond the those used in 
-        # the famous Rabiner article (A Tutorial on Hidden Markov Models and 
-        # Selected Applications in Speech Recognition, Feb. 1989)
-        
-        # Initialization
-        
-        e0 = self._binomialEmission(counts, coverage, 0)
-
-        delta = np.zeros([self.N, T], float)
-        delta[:,0] = np.log(self.initial) + np.log(e0)
-
-        psi = np.zeros([self.N, T], int)
-        # Recursion
-        for t in xrange(1,T):
-
-            e_t = self._binomialEmission(counts, coverage, t)
-            tmp = delta[:, t-1] + np.log(self.transition)
-            delta[:, t] = tmp.max(1) + np.log(e_t)
-            psi[:, t] = tmp.argmax(1)
-
-        # Backtracking
-        q_star = [np.argmax(delta[:, T-1])]
-        for t in reversed(xrange(T-1)):
-            q_star.insert(0, psi[q_star[0], t+1])
-
-        return q_star
-
     def train(self, train_set, maxiter=30, threshold=10e-10, graph=False):
         '''
         Train the model using the Baum-Welch algorithm and update the model's
@@ -419,7 +384,7 @@ class Hmm:
 
         print " --- Viterbi decoding ---"
         start_decode = time.time()
-        T = len(pred_set)
+        T = len(obs)
 
         counts = obs
         cov = coverage
@@ -451,7 +416,7 @@ class Hmm:
         end_decode = time.time()
         print "\t... done in %.1f seconds" % (end_decode - start_decode)
 
-        best_path = [self.states[i] for i in best_path_index]
+        best_path = [self.states[i] for i in q_star]
         return best_path
 
     def _posteriorDecode(self, obs, coverage):
@@ -504,7 +469,7 @@ class Hmm:
 
         return best_path, ci
 
-    def decode(self, obs, coverage, method="posterior"):
+    def decode(self, obs, cov, method="posterior"):
         '''
         Find the best methylation state sequence. Arguments :
         method:
@@ -517,11 +482,11 @@ class Hmm:
 
         # Call the selected algorithm for decoding
         if method=="posterior":
-            best_path, ci = _posteriorDecode(obs, cov)
+            best_path, ci = self._posteriorDecode(obs, cov)
             return best_path, ci
 
         elif method=="viterbi":
-            best_path = _viterbiDecode(obs, cov)
+            best_path = self._viterbiDecode(obs, cov)
             return best_path
 
 
@@ -552,9 +517,6 @@ class Hmm:
         counts = np.zeros([seq_length])
         gen_path = np.zeros([seq_length])
 
-        # Sample initial state and initial observation
-        gen_path[0] = np.random.choice(self.states, p=self.initial)
-        counts[0] = np.random.binomial(coverage[0], gen_path[0], size=1)
 
         print ' --- Simulating model based data --- '
         simu_start = time.time()
@@ -578,9 +540,12 @@ class Hmm:
             cov = simPoissonCoverage(lam, seq_length)
 
 
-        simu_end = time.time()
-        print "\t...done in %.1f secs" % (simu_end - simu_start)
 
+
+
+        # Sample initial state and initial observation
+        gen_path[0] = np.random.choice(self.states, p=self.initial)
+        counts[0] = np.random.binomial(cov[0], gen_path[0], size=1)
 
         # Sample the state paths and the corresponding observations
         for i in xrange(1, seq_length):
@@ -599,7 +564,9 @@ class Hmm:
             try:
                 counts[i] = np.random.binomial(cov[i], gen_path[i], 1)
             except:
-                ipdb.set_trace()
+                ipdb.set_trace
 
+        simu_end = time.time()
+        print "\t...done in %.1f secs" % (simu_end - simu_start)
 
         return gen_path, counts, cov
