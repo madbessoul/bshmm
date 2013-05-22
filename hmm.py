@@ -1,8 +1,10 @@
-import numpy as np
-import sys
-import time
-from scipy import stats
+import sys, time
 import ipdb
+
+# Scientific and plotting libraries
+import numpy as np
+from scipy import stats
+import pylab as plb
 
 # HELPER FUNCTIONS
 
@@ -108,32 +110,7 @@ def conf_interval(array, alpha):
     return ci_max, ci_min
 
 
-class Hmm:
-    def __init__(self, states, initial, transition):
-    # Class constructor with HMM arting parameters
-    # N States
-    # M Obsevations
-    # Initial probability distribution with N values
-    # N x N transition matrix
-    # N x M emission matrix
-    
-        self.states = states
-
-        if stoch_check(initial):
-            self.initial = initial
-        else:
-            print "Initial matrix must be stochastic (rows must sum to 1)"
-
-
-        if stoch_check(transition):
-            self.transition = transition
-        else: 
-            print "Transition matrix must be stochastic (rows must sum to 1)"
-
-        self.N = len(states)
-
-
-    def _kl_divergence(self, P, Q):
+def kl_divergence(self, P, Q):
     # Compute the Kullback-Leibler divergence for two distributions P and Q
         
         # Calculate the stationary distribution mu using eigen decomposition
@@ -146,6 +123,33 @@ class Hmm:
                 Dkl += fact*(np.log2(P[i,j]/Q[i,j]))
         return Dkl
 
+class Hmm:
+    def __init__(self, states, initial, transition):
+    # Class constructor with HMM arting parameters
+    # N States
+    # M Obsevations
+    # Initial probability distribution with N values
+    # N x N transition matrix
+    # N x M emission matrix
+
+        self.states = states
+
+        if stoch_check(initial):
+            self.initial = initial
+        else:
+            print "Initial matrix must be stochastic (rows must sum to 1)"
+
+
+        if stoch_check(transition):
+            self.transition = transition
+        else:
+            print "Transition matrix must be stochastic (rows must sum to 1)"
+
+        self.N = len(states)
+
+
+
+
     def updateTransition(self, new_transition):
     # Set a new transition matrix for the model
 
@@ -154,16 +158,6 @@ class Hmm:
             self.transition = new_transition
         else:
             print "Transition matrix mut be stochastic (row must sum to 1)"
-
-
-    # def updateEmission(self, new_emission):
-    # # Set a new emission matrix for the model
-        
-    #   new_emission = np.array(new_emission)
-    #   if stoch_check(new_emission):
-    #       self.emission = new_emission
-    #   else:
-    #       print "New emission matrix must be stochastic (rows must sum to 1)"
 
 
     def updateInitial(self, new_initial):
@@ -230,7 +224,6 @@ class Hmm:
 
         return obs_log_prob, alpha, scale
         
-
 
     def _backward(self, obs, coverage, scale):
         '''
@@ -373,8 +366,9 @@ class Hmm:
         # Compute the KL divergence between initial transition and estimated
         # transition
 
-        Dkl = self._kl_divergence(initial_transition, self.transition)
+        Dkl = kl_divergence(initial_transition, self.transition)
         return Dkl
+
  
     def _viterbiDecode(self, obs, coverage):
         '''
@@ -393,7 +387,6 @@ class Hmm:
         # Selected Applications in Speech Recognition, Feb. 1989)
         
         # Initialization
-        
         e0 = self._binomialEmission(counts, cov, 0)
 
         delta = np.zeros([self.N, T], float)
@@ -418,6 +411,7 @@ class Hmm:
 
         best_path = [self.states[i] for i in q_star]
         return best_path
+
 
     def _posteriorDecode(self, obs, coverage):
         '''
@@ -469,7 +463,8 @@ class Hmm:
 
         return best_path, ci
 
-    def decode(self, obs, cov, method="posterior"):
+
+    def decode(self, obs, cov, method="posterior", graph=True, real_path=None):
         '''
         Find the best methylation state sequence. Arguments :
         method:
@@ -478,17 +473,46 @@ class Hmm:
                                 intervals for each position.
                 "viterbi"       use the Viterbi algorithm to find the most probable path
                                 over the sequence
+        graph:  Boolean (! Requires Matplotlib) if True, draws the estimated
+                state sequence. If the data is simulated, provide the real
+                state sequence using the argument
         '''
 
         # Call the selected algorithm for decoding
         if method=="posterior":
             best_path, ci = self._posteriorDecode(obs, cov)
-            return best_path, ci
 
         elif method=="viterbi":
             best_path = self._viterbiDecode(obs, cov)
-            return best_path
 
+        # Plotting routines
+        if graph is not False:
+            plb.plot(best_path, '-g', alpha=.8)
+            plb.ylabel('Methylation probability')
+
+            if method=="posterior":
+                plb.fill_between(range(len(best_path)),
+                    best_path + ci[0,:],
+                    best_path - ci[1,:],
+                    alpha = .2)
+                plb.title('''
+                    Best state sequence estimation and CIs using Posterior decoding
+                    ''')
+
+            elif method=="viterbi":
+                plb.title('''
+                    Most probable sequence path using Viterbi algorithm
+                    ''')
+            if real_path is not None:
+                plb.plot(real_path, '--r', alpha=.7)
+            plb.show()
+
+        # Return accordingly
+        if method=="posterior":
+            return best_path, ci
+
+        elif method=="viterbi":
+            return best_path
 
     def generateData(self, coverage, 
         cov_type="real", 
