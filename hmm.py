@@ -504,7 +504,7 @@ class Hmm:
 
         return best_path, ci
 
-    def decode(self, obs, coverage, method="posterior", cov_type="real", fix_cov_val = 30):
+    def decode(self, obs, coverage, method="posterior"):
         '''
         Find the best methylation state sequence. Arguments :
         method:
@@ -513,26 +513,7 @@ class Hmm:
                                 intervals for each position.
                 "viterbi"       use the Viterbi algorithm to find the most probable path
                                 over the sequence
-        coverage type :
-                "real"          Uses real coverage data, from sampileup file for example.
-                "fixed"         Fixed coverage, use fix_cov_val to set the coverage value
-                "sampled"       Simulated coverage using a floating window, based on
-                                on real coverage data.
-                "poisson"       Simulation coverage ~ a poisson distribution
         '''
-
-        # Set the approriate coverage
-        if cov_type == "real":
-            cov = coverage
-
-        elif cov_type == "fixed":
-            cov = np.ones([len(obs)]) * fix_cov_val
-
-        elif cov_type == "sampled":
-            cov = simFloatWindowCoverage(coverage)
-
-        elif cov_type == "poisson":
-            cov = simPoissonCoverage(lam=14 )
 
         # Call the selected algorithm for decoding
         if method=="posterior":
@@ -560,7 +541,7 @@ class Hmm:
             "real"          Uses real coverage data, from sampileup file for example.
                             In this case, we DO NOT simulate coverage data.
             "fixed"         Fixed coverage, use fix_cov_val to set the coverage value
-            "sampled"       Simulated coverage using a floating window, based on
+            "window"       Simulated coverage using a floating window, based on
                             on real coverage data. Use the "window" argument to 
                             set the window size
             "poisson"       Simulation coverage ~ a poisson distribution
@@ -587,7 +568,7 @@ class Hmm:
             print "      - using fixed (%d)coverage data" % fix_cov_val
             cov = np.ones([seq_length]) * fix_cov_val
 
-        elif cov_type == "sampled":
+        elif cov_type == "window":
             print "      - floating window coverage simulation \(size = %d)" \
                 % window
             cov = simFloatWindowCoverage(coverage, seq_length, window)
