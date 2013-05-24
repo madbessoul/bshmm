@@ -6,6 +6,9 @@ import numpy as np
 from scipy import stats
 import pylab as plb
 
+# Plotting parameters
+plb.rcParams['font.size'] = 10
+
 # HELPER FUNCTIONS
 
 
@@ -54,7 +57,7 @@ def simPoissonCoverage(lam, length):
     return cov
 
 
-def simFloatWindowCoverage(real_cov, seq_length, win_length=100):
+def simFloatWindowCoverage(real_cov, seq_length, win_length):
     # Simulation of flaoating window coverage based on real data
     # The purpose is to replicate local coverage variabilit as much as possible
     # We use fixed size floating window (default = 100) around each position,
@@ -62,52 +65,44 @@ def simFloatWindowCoverage(real_cov, seq_length, win_length=100):
     # inside the window.
 
     sampled_cov = np.zeros([seq_length], int)
+
+    # Half of the window length
+    half_L = win_length / 2
+
     for i in xrange(seq_length):
 
         # Fetch the window content to be used a sampling distribution
-        if i < win_length / 2:
-            window_content = real_cov[:i + win_length / 2]
-        elif i > seq_length - win_length / 2:
-            window_content = real_cov[i - win_length / 2:]
+
+        if i < (half_L):
+            window = real_cov[:i + half_L]
+
+        elif i > seq_length - half_L:
+            window = real_cov[i - half_L:]
+
         else:
-            window_content = real_cov[i - win_length / 2:i + win_length / 2]
+            window = real_cov[i - half_L:i + half_L]
 
         # Construct the distribution of the windowed coverage
-        dist, bins = np.histogram(window_content,
-            bins=np.linspace(0, len(window_content) + 1,
-            max(window_content) + 1)
+        dist, bins = np.histogram(window,
+            bins=np.linspace(0, np.max(window) + 1,
+            max(window) + 1)
         )
+
         dist = np.array(dist, float)
         dist /= sum(dist)
-
         # Sample a value for the coverage at i from the dist distribution
         # whithout letting it be equal or in inf than 0
         while sampled_cov[i] <= 0:
-            sampled_cov[i] = np.random.choice(range(0, max(window_content)),
-                size=1, p=dist)
+            try:
+                sampled_cov[i] = np.random.choice(range(0, max(window)),
+                    size=1, p=dist)
+            except:
+                ipdb.set_trace()
 
     return sampled_cov
 
 
-def conf_interval(array, alpha):
 
-    # Return the confidence intervals
-    best_index = np.argmax(array)
-    best_val = max(array)
-
-    try:
-        ci_max = np.max(np.where(array[best_index:] \
-            >= best_val - alpha))
-    except:
-        ci_max = 0
-
-    try:
-        ci_min = np.min(np.where(array[:best_index] \
-            >= best_val - alpha))
-    except:
-        ci_min = 0
-
-    return ci_max, ci_min
 
 
 def kl_divergence(self, P, Q):
@@ -147,7 +142,32 @@ class Hmm:
 
         self.N = len(states)
 
+        self.cov_type_table = {}
 
+    def conf_interval(self, array, alpha):
+
+
+        thresh = (1 - alpha) / 2
+        # Return the confidence intervals
+        best_index = np.argmax(array)
+        best_val = max(array)
+        best_state = self.states[best_index]
+
+        try:
+            ci_min_index = np.max(np.where(np.cumsum(array) \
+                < thresh))
+            ci_min = self.states[ci_min_index + 1]
+        except ValueError:
+            ci_min = self.states[0]
+
+        try:
+            ci_max_index = np.max(np.where(np.cumsum(array[::-1]) \
+                < thresh))
+            ci_max = self.states[10 - ci_max_index - 1]
+        except ValueError:
+            ci_max = self.states[-1]
+
+        return ci_max, ci_min
 
 
     def updateTransition(self, new_transition):
@@ -376,8 +396,6 @@ class Hmm:
         given set of observations
         '''
 
-        print " --- Viterbi decoding ---"
-        start_decode = time.time()
         T = len(obs)
 
         counts = obs
@@ -406,14 +424,13 @@ class Hmm:
         for t in reversed(xrange(T-1)):
             q_star.insert(0, psi[q_star[0], t+1])
 
-        end_decode = time.time()
-        print "\t... done in %.1f seconds" % (end_decode - start_decode)
+
 
         best_path = [self.states[i] for i in q_star]
         return best_path
 
 
-    def _posteriorDecode(self, obs, coverage):
+    def _posteriorDecode(self, obs, coverage, ci_alpha):
         '''
         Find the most probable hidden state sequence using the posterior
         probability and the forward-backward 
@@ -424,9 +441,6 @@ class Hmm:
 
         T = len(counts)
 
-        # TIMESTAMP
-        print ' --- Posterior decoding ---'
-        post_decode_start = time.time()
 
         log_obs, alpha, scale = self._forward(counts, cov)
         beta = self._backward(counts, cov, scale)
@@ -437,7 +451,7 @@ class Hmm:
         
         # Compute posterior probabilities alpha(t) * beta(t) * 1/P(x)
         # for each position
-        ci_alpha = .45
+
         for t in xrange(T-1):
             Pkx[:,t] = (1. / Px) * alpha[:,t] * beta[:,t]
 
@@ -445,7 +459,7 @@ class Hmm:
             Pkx[:,t] *= 1. / sum(Pkx[:,t])
 
             # Confidence interval, alpha = ci_alpha
-            ci[0,t], ci[1,t] = conf_interval(Pkx[:,t], ci_alpha)
+            ci[0,t], ci[1,t] = self.conf_interval(Pkx[:,t], ci_alpha)
 
 
         # Find the argmax of the posterior probability and return
@@ -453,118 +467,177 @@ class Hmm:
         # arrays of states. Same for CIs
 
         best_path = [self.states[i] for i in np.argmax(Pkx, 0)]
-        ci[0,:] = [self.states[i] for i in ci[0,:]]
-        ci[1,:] = [self.states[i] for i in ci[1,:]]
 
 
         # TIMESTAMP
-        post_decode_stop = time.time()
-        print '\t...done in %.1f secs' % (post_decode_stop - post_decode_start)
-
-        return best_path, ci
 
 
-    def decode(self, obs, cov, method="posterior", graph=True, real_path=None):
+        return best_path, Pkx, ci
+
+
+    def decode(self, obs, cov,
+        method="posterior",
+        graph=False,
+        real_path=None,
+        verbose=False,
+        ci_alpha=.80):
         '''
         Find the best methylation state sequence. Arguments :
         method:
-                "posterior"     use posterior decoding and fwd-bwd algorithms to infer
-                                to infer methylation profile. Also returns confidence
-                                intervals for each position.
+                "posterior"     use posterior decoding and fwd-bwd algorithms
+                                to infer methylation profile. Also returns
+                                confidence intervals for each position.
                 "viterbi"       use the Viterbi algorithm to find the most probable path
                                 over the sequence
-        graph:  Boolean (! Requires Matplotlib) if True, draws the estimated
+        graph:
+                Boolean (! Requires Matplotlib) if True, draws the estimated
                 state sequence. If the data is simulated, provide the real
-                state sequence using the argument
+                state sequence using the "real_path" argument.
+        real_path:
+                If the data comes from a simulation, the decoding routine also
+                calculates the accuracy of the estimation.
+        verbose:
+                If True, print the running time and the current processed task
         '''
 
         # Call the selected algorithm for decoding
         if method=="posterior":
-            best_path, ci = self._posteriorDecode(obs, cov)
+            # TIMESTAMP
+            if verbose:
+               print ' --- Posterior decoding ---'
+               post_decode_start = time.time()
+            best_path, Pkx, ci = self._posteriorDecode(obs, cov, ci_alpha)
+            if verbose:
+                post_decode_stop = time.time()
+                print '\t...done in %.1f secs' % (post_decode_stop - post_decode_start)
+
 
         elif method=="viterbi":
+
+            if verbose:
+                print " --- Viterbi decoding ---"
+                start_decode = time.time()
+
             best_path = self._viterbiDecode(obs, cov)
+
+            if verbose:
+                end_decode = time.time()
+                print "\t... done in %.1f seconds" % (end_decode - start_decode)
+
+
+        # Bluntly calculate real path estimation accuracy
+        acc = 0.0
+        L = len(real_path)
+        for t in xrange(len(real_path)):
+            if real_path[t] > ci[0,t] or real_path[t] < ci[1,t]:
+                acc += 1.0
+        acc = (1 - (acc / L)) * 100
 
         # Plotting routines
         if graph is not False:
-            plb.plot(best_path, '-g', alpha=.8)
+            fig = plb.figure(figsize=(16,2.5), dpi=100)
+            if self.coverage_type is not "fixed":
+                plb.subplot(121)
+            plb.plot(best_path, '-g',
+                alpha=.8, lw=1.5,
+                label="Estimated path")
+
             plb.ylabel('Methylation probability')
 
             if method=="posterior":
                 plb.fill_between(range(len(best_path)),
-                    best_path + ci[0,:],
-                    best_path - ci[1,:],
-                    alpha = .2)
+                    ci[0,:],
+                    ci[1,:],
+                    alpha = .35,
+                    color = "green",
+                    label="Confidence")
                 plb.title('''
-                    Best state sequence estimation and CIs using Posterior decoding
-                    ''')
+                    Posterior decoding (Coverage: %s, param: %s) Acc: %.2f%%
+                    ''' % (self.coverage_type, self.coverage_param, acc))
 
             elif method=="viterbi":
                 plb.title('''
-                    Most probable sequence path using Viterbi algorithm
-                    ''')
+                    Viterbi path (Coverage %s, param: %s) Acc: %.2f%%
+                    ''' % (self.coverage_type, self.coverage_param, acc))
+            # IF we are dealing with simulated data
             if real_path is not None:
-                plb.plot(real_path, '--r', alpha=.7)
+                plb.plot(real_path, '--r', alpha=.7, label="Real profile")
+
+            if self.coverage_type is not "fixed":
+                plb.subplot(122)
+                plb.plot(cov, alpha = .4)
+                plb.title('Coverage')
+            plb.legend()
             plb.show()
 
         # Return accordingly
         if method=="posterior":
-            return best_path, ci
+            return best_path, Pkx, ci, acc
 
         elif method=="viterbi":
-            return best_path
+            return best_path, acc
 
     def generateData(self, coverage, 
         cov_type="real", 
         fix_cov_val = 30, 
         seq_length=1000,
-        window=100,
-        lam = 15):
+        window_size=100,
+        lam = 15,
+        verbose=False):
+
 
         '''
         Use the HMM as a generative model to simulate data using the model
         given parameters. We generate 3 types of data : state sequence, obs.
         sequence (C counts) and coverage data, with one of the following method,
-        set by the cov_type argument:
+        set by the "cov_type" argument:
 
             "real"          Uses real coverage data, from sampileup file for example.
                             In this case, we DO NOT simulate coverage data.
             "fixed"         Fixed coverage, use fix_cov_val to set the coverage value
-            "window"       Simulated coverage using a floating window, based on
-                            on real coverage data. Use the "window" argument to 
+            "window"        Simulates coverage using a floating window, based on
+                            on real coverage data. Use the "window_size" argument to
                             set the window size
             "poisson"       Simulation coverage ~ a poisson distribution
                             use the "lam" argument to set the parameter of
                             the poisson distribution
         '''
 
+        cov_type_table = {
+        'fixed':fix_cov_val,
+        'window':window_size,
+        'poisson':lam,
+        'real':None
+        }
+
+        self.coverage_type = cov_type
+        setattr(self, 'coverage_param', cov_type_table[cov_type])
+
         counts = np.zeros([seq_length])
         gen_path = np.zeros([seq_length])
 
+        if verbose:
+            print ' --- Simulating model based data --- '
+            simu_start = time.time()
 
-        print ' --- Simulating model based data --- '
-        simu_start = time.time()
+        # Simulating coverage dat
 
-        # Simulating coverage data
         if cov_type == "real":
             print "      - using real coverage data"
             cov = coverage
 
         elif cov_type == "fixed":
-            print "      - using fixed (%d)coverage data" % fix_cov_val
             cov = np.ones([seq_length]) * fix_cov_val
 
         elif cov_type == "window":
-            print "      - floating window coverage simulation \(size = %d)" \
-                % window
-            cov = simFloatWindowCoverage(coverage, seq_length, window)
+            cov = simFloatWindowCoverage(coverage, seq_length, window_size)
 
         elif cov_type == "poisson":
-            print "      - Poisson coverage simulation (lam = %d)" % lam
             cov = simPoissonCoverage(lam, seq_length)
-
-
-
+        else:
+            print "Error: cov_type arg. value not recognized. Allowed values\
+            are: 'fixed', 'real', 'window' and 'poisson'."
+            sys.exit()
 
 
         # Sample initial state and initial observation
@@ -589,8 +662,8 @@ class Hmm:
                 counts[i] = np.random.binomial(cov[i], gen_path[i], 1)
             except:
                 ipdb.set_trace
-
-        simu_end = time.time()
-        print "\t...done in %.1f secs" % (simu_end - simu_start)
+        if verbose:
+            simu_end = time.time()
+            print "\t...done in %.1f secs" % (simu_end - simu_start)
 
         return gen_path, counts, cov
