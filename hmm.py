@@ -306,14 +306,12 @@ class Hmm:
         for t in reversed(xrange(T-1)):
 
             # Compute the transition matrix power
-            # ipdb.set_trace()
             dist = pos[t+1] - pos[t]
             if dist <= self.max_dist:
                 trans_matrix = self.trans_powers[:,:,dist-1]
             else:
                 trans_matrix = stationaryDist(self.transition)
                 trans_matrix = np.tile(trans_matrix, (self.N, 1))
-            dists.append(dist)
 
             e = self._binomialEmission(obs, coverage, t+1)
             beta[:,t] = np.dot(trans_matrix, (e * beta[:,t+1]))
@@ -444,7 +442,7 @@ class Hmm:
         return Dkl
 
  
-    def _viterbiDecode(self, obs, coverage):
+    def _viterbiDecode(self, pos, obs, coverage):
         '''
         Run the Viterbi algorithm to find the most probable state path for a 
         given set of observations
@@ -468,8 +466,16 @@ class Hmm:
         # Recursion
         for t in xrange(1,T):
 
+            # Compute the transition matrix power
+            dist = pos[t] - pos[t-1]
+            if dist <= self.max_dist:
+                trans_matrix = self.trans_powers[:,:,dist-1]
+            else:
+                trans_matrix = stationaryDist(self.transition)
+                trans_matrix = np.tile(trans_matrix, (self.N, 1))
+
             e_t = self._binomialEmission(counts, cov, t)
-            tmp = delta[:, t-1] + np.log(self.transition)
+            tmp = delta[:, t-1] + np.log(trans_matrix)
             delta[:, t] = tmp.max(1) + np.log(e_t)
             psi[:, t] = tmp.argmax(1)
 
@@ -572,7 +578,7 @@ class Hmm:
                 print " --- Viterbi decoding ---"
                 start_decode = time.time()
 
-            best_path = self._viterbiDecode(obs, cov)
+            best_path = self._viterbiDecode(pos, obs, cov)
 
             if verbose:
                 end_decode = time.time()
@@ -582,10 +588,11 @@ class Hmm:
         # Bluntly calculate real path estimation accuracy
         acc = 0.0
         L = len(real_path)
-        for t in xrange(len(real_path)):
-            if real_path[t] > ci[0,t] or real_path[t] < ci[1,t]:
-                acc += 1.0
-        acc = (1 - (acc / L)) * 100
+        if method == "posterior":
+            for t in xrange(len(real_path)):
+                if real_path[t] > ci[0,t] or real_path[t] < ci[1,t]:
+                    acc += 1.0
+            acc = (1 - (acc / L)) * 100
 
         # Plotting routines
         if graph is not False:
@@ -617,8 +624,8 @@ class Hmm:
 
             elif method=="viterbi":
                 plb.title('''
-                    Viterbi path (Coverage %s, param: %s) Acc: %.2f%%
-                    ''' % (self.coverage_type, self.coverage_param, acc))
+                    Viterbi path (Coverage %s, param: %s)
+                    ''' % (self.coverage_type, self.coverage_param,))
             # IF we are dealing with simulated data
             if real_path is not None:
                 plb.plot(pos, real_path, '-', color="blue", alpha=.4, label="Real profile")
@@ -635,7 +642,7 @@ class Hmm:
             return best_path, Pkx, ci, acc
 
         elif method=="viterbi":
-            return best_path, acc
+            return best_path
 
     def generateData(self, coverage, 
         cov_type="real", 
