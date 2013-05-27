@@ -35,6 +35,7 @@ def stoch_check(matrix):
         return False
 
 
+
 def stationaryDist(matrix):
 # Compute the stationary distribution of a Markov Model based on the
 # transition matrix. We use eigen decomposition for obvious performance
@@ -44,6 +45,29 @@ def stationaryDist(matrix):
     mu = np.array(U[:, np.where(np.abs(S - 1.) < 1e-8)[0][0]].flat)
     mu = mu / np.sum(mu)
     return mu
+
+def maxTransPower(matrix, eps=1e-6):
+# Find the highest power of the transition matrix n such as trans^n - mu < eps
+# This is used for the pre-calculation of the transition matrix powers
+# in order to speed up the forward-backward algorithm
+
+    # Find the highed eigev value of the transition matrix
+    mu = stationaryDist(matrix)
+
+    # Compute the first power of the matrix
+    n = 2
+    diff = np.real(np.linalg.matrix_power(matrix, n)[0,:]) - mu
+    diff = diff.real
+
+    # While trans^n is still higher than the threshold
+    while not (abs(diff) < eps).all():
+
+        # Compute the next power
+        n+= 1
+        diff = np.real(np.linalg.matrix_power(matrix, n)[0,:]) - mu
+
+    # Return the highest power when the threshold is satisfied
+    return n
 
 
 def simPoissonCoverage(lam, length):
@@ -100,8 +124,6 @@ def simFloatWindowCoverage(real_cov, seq_length, win_length):
                 ipdb.set_trace()
 
     return sampled_cov
-
-
 
 
 
@@ -546,14 +568,21 @@ class Hmm:
 
             if method=="posterior":
                 plb.fill_between(range(len(best_path)),
-                    ci[0,:],
+                    np.zeros([len(best_path)]),
                     ci[1,:],
-                    alpha = .35,
+                    alpha = .25,
                     color = "green",
                     label="Confidence")
+                plb.fill_between(range(len(best_path)),
+                    ci[0,:],
+                    np.ones([len(best_path)]),
+                    alpha = .25,
+                    color = "green",
+                    label="Confidence")
+                plb.xlim(0,len(best_path))
                 plb.title('''
-                    Posterior decoding (Coverage: %s, param: %s) Acc: %.2f%%
-                    ''' % (self.coverage_type, self.coverage_param, acc))
+                    Posterior decoding (Coverage: %s, param: %s) Acc: %.2f%%, alpha=%d%%
+                    ''' % (self.coverage_type, self.coverage_param, acc, ci_alpha*100))
 
             elif method=="viterbi":
                 plb.title('''
@@ -561,7 +590,7 @@ class Hmm:
                     ''' % (self.coverage_type, self.coverage_param, acc))
             # IF we are dealing with simulated data
             if real_path is not None:
-                plb.plot(real_path, '--r', alpha=.7, label="Real profile")
+                plb.plot(real_path, '-', color="blue", alpha=.4, label="Real profile")
 
             if self.coverage_type is not "fixed":
                 plb.subplot(122)
