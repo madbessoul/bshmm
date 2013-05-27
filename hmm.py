@@ -70,6 +70,7 @@ def maxTransPower(matrix, eps=1e-6):
     return n
 
 
+
 def simPoissonCoverage(lam, length):
     # Simulation of a poisson coverage of size "length"
 
@@ -166,6 +167,20 @@ class Hmm:
 
         self.cov_type_table = {}
 
+        self.max_dist = maxTransPower(self.transition)
+        self.trans_powers = self._preComputeDistances(self.max_dist)
+
+    def _preComputeDistances(self, max_n):
+    # Pre compute transition matrix powers
+
+        # We store the matrice in a 3 dimensional matrix
+        dist_mat = np.zeros([self.N, self.N, max_n])
+
+        for n in xrange(1,max_n):
+            dist_mat[:,:,n-1] = np.linalg.matrix_power(self.transition, n)
+
+        return dist_mat
+
     def conf_interval(self, array, alpha):
 
 
@@ -228,7 +243,7 @@ class Hmm:
         return e
 
 
-    def _forward(self, obs, coverage):
+    def _forward(self, pos, obs, coverage):
     # Compute P(observation sequence | state sequence)
     # the forward algorithm and calculate the alpha variable as well as 
     # the observed sequences probability
@@ -253,10 +268,17 @@ class Hmm:
         alpha[:,0] *= scale[0]
         ### Induction step (recursion)
         for t in xrange(1, T):
+
+            # Compute the transition matrix power
+            dist = pos[t] - pos[t - 1]
+            if dist <= self.max_dist:
+                trans_matrix = self.trans_powers[:,:,dist-1]
+            else:
+                trans_matrix = stationaryDist(self.transition)
+                trans_matrix = np.tile(trans_matrix, (self.N, 1))
     
             e = self._binomialEmission(obs, coverage, t)
-            alpha[:,t] = np.dot(alpha[:,t-1], self.transition) * e
-
+            alpha[:,t] = np.dot(alpha[:,t-1], trans_matrix) * e
 
             scale[t] = 1. / np.sum(alpha[:,t])
             alpha[:,t] *= scale[t]
@@ -267,7 +289,7 @@ class Hmm:
         return obs_log_prob, alpha, scale
         
 
-    def _backward(self, obs, coverage, scale):
+    def _backward(self, pos, obs, coverage, scale):
         '''
         Run the backward algorithm and calculate the beta variable
         '''
@@ -278,13 +300,23 @@ class Hmm:
         # Initialization
         beta[:,T-1] = 1.0
         beta[:,T-1] *= scale[T-1]
-        
+        dists = []
         # Induction 
         # Reverse iteration from T-1 to 0
         for t in reversed(xrange(T-1)):
 
+            # Compute the transition matrix power
+            # ipdb.set_trace()
+            dist = pos[t+1] - pos[t]
+            if dist <= self.max_dist:
+                trans_matrix = self.trans_powers[:,:,dist-1]
+            else:
+                trans_matrix = stationaryDist(self.transition)
+                trans_matrix = np.tile(trans_matrix, (self.N, 1))
+            dists.append(dist)
+
             e = self._binomialEmission(obs, coverage, t+1)
-            beta[:,t] = np.dot(self.transition, (e * beta[:,t+1]))
+            beta[:,t] = np.dot(trans_matrix, (e * beta[:,t+1]))
 
             # Scaling using the forward algorithm scaling factors
             beta[:,t] *= scale[t]
@@ -452,7 +484,7 @@ class Hmm:
         return best_path
 
 
-    def _posteriorDecode(self, obs, coverage, ci_alpha):
+    def _posteriorDecode(self, pos, obs, coverage, ci_alpha):
         '''
         Find the most probable hidden state sequence using the posterior
         probability and the forward-backward 
@@ -464,8 +496,8 @@ class Hmm:
         T = len(counts)
 
 
-        log_obs, alpha, scale = self._forward(counts, cov)
-        beta = self._backward(counts, cov, scale)
+        log_obs, alpha, scale = self._forward(pos, counts, cov)
+        beta = self._backward(pos, counts, cov, scale)
 
         Pkx = np.zeros([self.N, T])
         ci = np.zeros([2, T])
@@ -497,7 +529,7 @@ class Hmm:
         return best_path, Pkx, ci
 
 
-    def decode(self, obs, cov,
+    def decode(self, pos, obs, cov,
         method="posterior",
         graph=False,
         real_path=None,
@@ -528,7 +560,7 @@ class Hmm:
             if verbose:
                print ' --- Posterior decoding ---'
                post_decode_start = time.time()
-            best_path, Pkx, ci = self._posteriorDecode(obs, cov, ci_alpha)
+            best_path, Pkx, ci = self._posteriorDecode(pos, obs, cov, ci_alpha)
             if verbose:
                 post_decode_stop = time.time()
                 print '\t...done in %.1f secs' % (post_decode_stop - post_decode_start)
@@ -560,26 +592,25 @@ class Hmm:
             fig = plb.figure(figsize=(16,2.5), dpi=100)
             if self.coverage_type is not "fixed":
                 plb.subplot(121)
-            plb.plot(best_path, '-g',
+            plb.plot(pos, best_path, '-g',
                 alpha=.8, lw=1.5,
                 label="Estimated path")
 
             plb.ylabel('Methylation probability')
-
+            plb.xlim(min(pos), max(pos))
             if method=="posterior":
-                plb.fill_between(range(len(best_path)),
-                    np.zeros([len(best_path)]),
+                plb.fill_between(pos,
+                    np.zeros([len(pos)]),
                     ci[1,:],
                     alpha = .25,
                     color = "green",
                     label="Confidence")
-                plb.fill_between(range(len(best_path)),
+                plb.fill_between(pos,
                     ci[0,:],
-                    np.ones([len(best_path)]),
+                    np.ones([len(pos)]),
                     alpha = .25,
                     color = "green",
                     label="Confidence")
-                plb.xlim(0,len(best_path))
                 plb.title('''
                     Posterior decoding (Coverage: %s, param: %s) Acc: %.2f%%, alpha=%d%%
                     ''' % (self.coverage_type, self.coverage_param, acc, ci_alpha*100))
@@ -590,11 +621,11 @@ class Hmm:
                     ''' % (self.coverage_type, self.coverage_param, acc))
             # IF we are dealing with simulated data
             if real_path is not None:
-                plb.plot(real_path, '-', color="blue", alpha=.4, label="Real profile")
+                plb.plot(pos, real_path, '-', color="blue", alpha=.4, label="Real profile")
 
             if self.coverage_type is not "fixed":
                 plb.subplot(122)
-                plb.plot(cov, alpha = .4)
+                plb.bar(pos, cov, alpha = .4, color='Blue')
                 plb.title('Coverage')
             plb.legend()
             plb.show()
