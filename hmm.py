@@ -5,9 +5,12 @@ import ipdb
 import numpy as np
 from scipy import stats
 import pylab as plb
+import matplotlib
 
 # Plotting parameters
 plb.rcParams['font.size'] = 10
+matplotlib.rc('axes',edgecolor='#979797')
+matplotlib.rc('font', size=8, family='sans-serif')
 
 # HELPER FUNCTIONS
 
@@ -55,7 +58,7 @@ def maxTransPower(matrix, eps=1e-6):
     mu = stationaryDist(matrix)
 
     # Compute the first power of the matrix
-    n = 2
+    n = 1
     diff = np.real(np.linalg.matrix_power(matrix, n)[0,:]) - mu
     diff = diff.real
 
@@ -128,7 +131,7 @@ def simFloatWindowCoverage(real_cov, seq_length, win_length):
 
 
 
-def kl_divergence(self, P, Q):
+def kl_divergence(P, Q):
     # Compute the Kullback-Leibler divergence for two distributions P and Q
         
         # Calculate the stationary distribution mu using eigen decomposition
@@ -140,6 +143,8 @@ def kl_divergence(self, P, Q):
                 fact = P[i,j] * mu_P[i]
                 Dkl += fact*(np.log2(P[i,j]/Q[i,j]))
         return Dkl
+
+
 
 class Hmm:
     def __init__(self, states, initial, transition):
@@ -164,20 +169,26 @@ class Hmm:
             print "Transition matrix must be stochastic (rows must sum to 1)"
 
         self.N = len(states)
-
+        self.coverage_type = "real"
+        self.coverage_param = "NA"
         self.cov_type_table = {}
 
+
         self.max_dist = maxTransPower(self.transition)
-        self.trans_powers = self._preComputeDistances(self.max_dist)
+        self.trans_powers = np.zeros([self.max_dist, self.N, self.N])
+        
 
     def _preComputeDistances(self, max_n):
     # Pre compute transition matrix powers
 
         # We store the matrice in a 3 dimensional matrix
-        dist_mat = np.zeros([self.N, self.N, max_n])
+        dist_mat = np.zeros([max_n, self.N, self.N])
 
-        for n in xrange(1,max_n):
-            dist_mat[:,:,n-1] = np.linalg.matrix_power(self.transition, n)
+        for n in xrange(0, max_n):
+            dist_mat[n,:,:] = np.linalg.matrix_power(self.transition, n)
+            
+            for i in xrange(self.N):
+                dist_mat[n,i,:] /= sum(dist_mat[n,i,:])
 
         return dist_mat
 
@@ -214,7 +225,7 @@ class Hmm:
         if stoch_check(new_transition):
             self.transition = new_transition
         else:
-            print "Transition matrix mut be stochastic (row must sum to 1)"
+            print "Transition matrix must be stochastic (row must sum to 1)"
 
 
     def updateInitial(self, new_initial):
@@ -241,6 +252,14 @@ class Hmm:
         # The return vector must be stochastic, so we divide by the sum of its
         # elements 
         return e
+
+
+    ##########################################################################
+    #                                                                           
+    # TRAINING ROUTINES
+    #
+    ##########################################################################
+
 
 
     def _forward(self, pos, obs, coverage):
@@ -272,11 +291,10 @@ class Hmm:
             # Compute the transition matrix power
             dist = pos[t] - pos[t - 1]
             if dist <= self.max_dist:
-                trans_matrix = self.trans_powers[:,:,dist-1]
+                trans_matrix = self.trans_powers[dist-1,:,:]
             else:
                 trans_matrix = stationaryDist(self.transition)
                 trans_matrix = np.tile(trans_matrix, (self.N, 1))
-    
             e = self._binomialEmission(obs, coverage, t)
             alpha[:,t] = np.dot(alpha[:,t-1], trans_matrix) * e
 
@@ -308,7 +326,7 @@ class Hmm:
             # Compute the transition matrix power
             dist = pos[t+1] - pos[t]
             if dist <= self.max_dist:
-                trans_matrix = self.trans_powers[:,:,dist-1]
+                trans_matrix = self.trans_powers[dist-1,:,:]
             else:
                 trans_matrix = stationaryDist(self.transition)
                 trans_matrix = np.tile(trans_matrix, (self.N, 1))
@@ -323,7 +341,7 @@ class Hmm:
         return beta
 
 
-    def _ksi(self, obs, coverage, alpha, beta):
+    def _ksi(self, pos, obs, coverage, alpha, beta):
     # Calculate ksis. 
     # Ksi is a N x N x T-1 matrix
 
@@ -331,13 +349,19 @@ class Hmm:
         ksi = np.zeros([self.N, self.N, T-1])
 
         for t in xrange(T-1):
+            dist = pos[t+1] - pos[t]
+            if dist <= self.max_dist:
+                trans_matrix = self.trans_powers[dist-1,:,:]
+            else:
+                trans_matrix = stationaryDist(self.transition)
+                trans_matrix = np.tile(trans_matrix, (self.N, 1))
+
             for i in xrange(self.N):
                 e = self._binomialEmission(obs, coverage, t+1)
                 ksi[i, :, t] = alpha[i, t] * \
-                    self.transition[i, :] * \
+                    trans_matrix[i, :] * \
                     e * \
                     beta[:, t+1]
-
         return ksi
 
 
@@ -349,17 +373,17 @@ class Hmm:
         return gamma
 
 
-    def _baumWelch(self, train_set):
+    def _baumWelch(self, pos, obs, cov):
     # Run the Baum-Welch algorithm to estimate new paramters based on 
     # a set of obsercations
     
-        counts = train_set['count']
-        coverage = train_set['cov']
+        counts = obs
+        coverage = cov
         T = len(counts)
         
-        log_obs, alpha, scale = self._forward(counts, coverage)
-        beta = self._backward(counts, coverage, scale)
-        ksi = self._ksi(counts, coverage, alpha, beta)
+        log_obs, alpha, scale = self._forward(pos, counts, coverage)
+        beta = self._backward(pos, counts, coverage, scale)
+        ksi = self._ksi(pos, counts, coverage, alpha, beta)
         gamma = self._gamma(alpha, beta)
 
         # Expectation of being in state i
@@ -385,14 +409,15 @@ class Hmm:
         for i in xrange(self.N):
             new_transition[i,:] = expect_si_sj_all_TM1[i,:] / \
                                 expect_si_all_TM1[i]
-            new_transition[i,:] /= sum(new_transition[i,:])
+
+            new_transition[i] /= sum(new_transition[i])
 
         self.updateTransition(new_transition)
 
         # Return log likelihood
         return log_obs
 
-    def train(self, train_set, maxiter=30, threshold=10e-10, graph=False):
+    def train(self, pos, obs, cov, maxiter=30, threshold=10e-10, graph=False):
         '''
         Train the model using the Baum-Welch algorithm and update the model's
         current parameters based on a set training observation, a max number of 
@@ -406,6 +431,8 @@ class Hmm:
         '''
 
         print " --- Parameter reestimation ---"
+        # Transition matrix powers pre-calculation
+        self.trans_powers = self._preComputeDistances(self.max_dist)
 
 
         initial_transition = self.transition
@@ -417,7 +444,7 @@ class Hmm:
             sys.stdout.flush()
 
             # Run Baum-Welch and store the log-likelihood prob
-            LL = self._baumWelch(train_set)
+            LL = self._baumWelch(pos, obs, cov)
             LLs.append(LL)
 
             # # Stop if the LL plateau is reached
@@ -501,6 +528,7 @@ class Hmm:
 
         T = len(counts)
 
+        self.trans_powers = self._preComputeDistances(self.max_dist)
 
         log_obs, alpha, scale = self._forward(pos, counts, cov)
         beta = self._backward(pos, counts, cov, scale)
@@ -586,41 +614,39 @@ class Hmm:
 
 
         # Bluntly calculate real path estimation accuracy
-        acc = 0.0
-        L = len(real_path)
-        if method == "posterior":
-            for t in xrange(len(real_path)):
-                if real_path[t] > ci[0,t] or real_path[t] < ci[1,t]:
-                    acc += 1.0
-            acc = (1 - (acc / L)) * 100
+        if real_path is not None:
+            acc = 0.0
+            L = len(real_path)
+            if method == "posterior":
+                for t in xrange(len(real_path)):
+                    if real_path[t] > ci[0,t] or real_path[t] < ci[1,t]:
+                        acc += 1.0
+                acc = (1 - (acc / L)) * 100
+        else:
+            acc = 0.0
 
         # Plotting routines
         if graph is not False:
             fig = plb.figure(figsize=(16,2.5), dpi=100)
             if self.coverage_type is not "fixed":
-                plb.subplot(121)
-            plb.plot(pos, best_path, '-g',
+                plb.subplot(111)
+            plb.plot(pos, best_path, '-', color="#B23927",
                 alpha=.8, lw=1.5,
-                label="Estimated path")
+                label="Estimation")
 
             plb.ylabel('Methylation probability')
             plb.xlim(min(pos), max(pos))
             if method=="posterior":
                 plb.fill_between(pos,
-                    np.zeros([len(pos)]),
                     ci[1,:],
-                    alpha = .25,
-                    color = "green",
-                    label="Confidence")
-                plb.fill_between(pos,
                     ci[0,:],
-                    np.ones([len(pos)]),
-                    alpha = .25,
-                    color = "green",
-                    label="Confidence")
+                    color = "#BDDAFF",
+                    label="Confidence interval")
+
                 plb.title('''
                     Posterior decoding (Coverage: %s, param: %s) Acc: %.2f%%, alpha=%d%%
                     ''' % (self.coverage_type, self.coverage_param, acc, ci_alpha*100))
+
 
             elif method=="viterbi":
                 plb.title('''
@@ -628,20 +654,27 @@ class Hmm:
                     ''' % (self.coverage_type, self.coverage_param,))
             # IF we are dealing with simulated data
             if real_path is not None:
-                plb.plot(pos, real_path, '-', color="blue", alpha=.4, label="Real profile")
-
-            if self.coverage_type is not "fixed":
-                plb.subplot(122)
-                plb.bar(pos, cov, alpha = .4, color='Blue')
-                plb.title('Coverage')
+                plb.plot(pos, real_path, '-', 
+                    color="#3892E3", 
+                    label="Simulation")
             plb.legend()
+
+            # if self.coverage_type is not "fixed":
+            #     plb.subplot(122)
+            #     plb.plot(pos, cov, '-', color='#3892E3', label="Coverage")
+            #     plb.plot(pos, obs, '-', color='#B23927', label="C-C matches")
+            #     plb.xlim(min(pos), max(pos))
+            #     plb.title('Coverage depth and C-C matches counting')
+            #     plb.legend()
+
             plb.show()
+            plb.savefig("figure.pdf", transparent=True)
 
         # Return accordingly
-        if method=="posterior":
-            return best_path, Pkx, ci, acc
+        if method=="posterior" and real_path is not None:
+            return best_path, acc
 
-        elif method=="viterbi":
+        else:
             return best_path
 
     def generateData(self, coverage, 
