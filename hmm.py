@@ -176,7 +176,20 @@ class Hmm:
 
         self.max_dist = maxTransPower(self.transition)
         self.trans_powers = np.zeros([self.max_dist, self.N, self.N])
+    
+    def kl_divergence(self, P, Q):
+    # Compute the Kullback-Leibler divergence for two distributions P and Q
         
+        # Calculate the stationary distribution mu using eigen decomposition
+        mu_P = stationaryDist(P)
+        Dkl = 0
+        N, M = P.shape
+        for i in xrange(N):
+            for j in xrange(M):
+                fact = P[i,j] * mu_P[i]
+                Dkl += fact*(np.log2(P[i,j]/Q[i,j]))
+        return Dkl
+
 
     def _preComputeDistances(self, max_n):
     # Pre compute transition matrix powers
@@ -238,20 +251,28 @@ class Hmm:
         else:
             print "New initial vector must be stochastic (row must sum to 1)"
 
-
-    def _binomialEmission(self, obs, coverage, t):
-    # Compute the binomial emission matrix at a time t
-    # The Binomial emission matrix is defined as follows:
+    def _binomialEmissionPrecalculation(self, obs, coverage):
+    # We precalculate all the emission distributions based on max 
+    # values of observations and coverage
+    # this is intended to be a significant perfomance gain instead
+    # of computing the binomial pmf every single step of the algorithms
+    # especially on very long sequences
     # B(obs, state) = P(obs_i|state_i)
     #             = Binomial(n = c_counts, p = methylation, k = coverage)
 
-    
-        e = (stats.distributions.binom.pmf(obs[t], coverage[t], self.states))
-        e *= 1. / sum(e)
+        max_obs = max(obs)
+        max_cov = max(coverage)
+
+        emit_matrix = np.zeros([max_cov, max_obs, self.N])
+        for i in xrange(max_cov):
+            for j in xrange(max_obs):
+                emit_matrix[i, j, :] = stats.distributions.binom.pmf(j, i, self.states)
+                emit_matrix[i, j, :] *= 1. / sum(emit_matrix[i, j, :])
 
         # The return vector must be stochastic, so we divide by the sum of its
         # elements 
-        return e
+        return emit_matrix
+
 
 
     ##########################################################################
@@ -280,7 +301,7 @@ class Hmm:
         # we normalize the probabilities using a scaling value while keeping 
         # the recursion coherent 
 
-        e0 = self._binomialEmission(obs, coverage, 0)
+        e0 = self.emission_matrix[coverage[0] - 1, obs[0] - 1]
         alpha[:,0] = self.initial * e0
         
         scale[0] = 1. / np.sum(alpha[:,0])
@@ -295,7 +316,8 @@ class Hmm:
             else:
                 trans_matrix = stationaryDist(self.transition)
                 trans_matrix = np.tile(trans_matrix, (self.N, 1))
-            e = self._binomialEmission(obs, coverage, t)
+            e = self.emission_matrix[coverage[t] - 1, obs[t] - 1]
+            # ipdb.set_trace()
             alpha[:,t] = np.dot(alpha[:,t-1], trans_matrix) * e
 
             scale[t] = 1. / np.sum(alpha[:,t])
@@ -331,7 +353,7 @@ class Hmm:
                 trans_matrix = stationaryDist(self.transition)
                 trans_matrix = np.tile(trans_matrix, (self.N, 1))
 
-            e = self._binomialEmission(obs, coverage, t+1)
+            e = self.emission_matrix[coverage[t+1] - 1, obs[t+1] - 1]
             beta[:,t] = np.dot(trans_matrix, (e * beta[:,t+1]))
 
             # Scaling using the forward algorithm scaling factors
@@ -339,8 +361,7 @@ class Hmm:
             beta[:,t] *= 1. / sum(beta[:,t])
 
         return beta
-
-
+    # @profile
     def _ksi(self, pos, obs, coverage, alpha, beta):
     # Calculate ksis. 
     # Ksi is a N x N x T-1 matrix
@@ -357,11 +378,8 @@ class Hmm:
                 trans_matrix = np.tile(trans_matrix, (self.N, 1))
 
             for i in xrange(self.N):
-                e = self._binomialEmission(obs, coverage, t+1)
-                ksi[i, :, t] = alpha[i, t] * \
-                    trans_matrix[i, :] * \
-                    e * \
-                    beta[:, t+1]
+                e = self.emission_matrix[coverage[t+1] -1, obs[t+1] - 1]
+                ksi[i, :, t] = alpha[i, t] * trans_matrix[i, :] * e * beta[:, t+1]
         return ksi
 
 
@@ -411,62 +429,10 @@ class Hmm:
                                 expect_si_all_TM1[i]
 
             new_transition[i] /= sum(new_transition[i])
-
         self.updateTransition(new_transition)
 
         # Return log likelihood
         return log_obs
-
-    def train(self, pos, obs, cov, maxiter=30, threshold=10e-10, graph=False):
-        '''
-        Train the model using the Baum-Welch algorithm and update the model's
-        current parameters based on a set training observation, a max number of 
-        iteration and a threshold for the likelihood difference between new and
-        current model
-            - maxiter :     maximum number of EM iterations. Default = 100
-            - threshold : minimum value for log-likehood difference between two
-                        iterations. If lower, the EM stops. Default = 10e-10
-            - graph :   plot the LL evolution at the end of the estimation. 
-                        default = True  
-        '''
-
-        print " --- Parameter reestimation ---"
-        # Transition matrix powers pre-calculation
-        self.trans_powers = self._preComputeDistances(self.max_dist)
-
-
-        initial_transition = self.transition
-        start  = time.time()
-        LLs = []
-        for i in xrange(maxiter):
-            # Print current EM iteration
-            sys.stdout.write("\r   EM Iteration : %i/%i" % (i+1, maxiter))
-            sys.stdout.flush()
-
-            # Run Baum-Welch and store the log-likelihood prob
-            LL = self._baumWelch(pos, obs, cov)
-            LLs.append(LL)
-
-            # # Stop if the LL plateau is reached
-            # if (i > 2):
-            #   if (LLs[-1] - LLs[-2] < threshold):
-            #       print '\nOops, log-likelihood plateau, training stopped'
-            #       break
-        stop = time.time()
-        print "\t... done in %.1f secs" % (stop - start)
-
-        # Plot LL evolution for each iteration
-        # if graph is True:
-        #   from pylab import plot, title, show
-        #   plot(LLs, '+')
-        #   title('Log-likelihood evolution during training')
-        #   show()
-
-        # Compute the KL divergence between initial transition and estimated
-        # transition
-
-        Dkl = kl_divergence(initial_transition, self.transition)
-        return Dkl
 
  
     def _viterbiDecode(self, pos, obs, coverage):
@@ -484,8 +450,7 @@ class Hmm:
         # Selected Applications in Speech Recognition, Feb. 1989)
         
         # Initialization
-        e0 = self._binomialEmission(counts, cov, 0)
-
+        e0 = self.emission_matrix[coverage[0]-1, obs[0]-1]
         delta = np.zeros([self.N, T], float)
         delta[:,0] = np.log(self.initial) + np.log(e0)
 
@@ -496,12 +461,13 @@ class Hmm:
             # Compute the transition matrix power
             dist = pos[t] - pos[t-1]
             if dist <= self.max_dist:
-                trans_matrix = self.trans_powers[:,:,dist-1]
+                trans_matrix = self.trans_powers[dist-1,:,:]
             else:
                 trans_matrix = stationaryDist(self.transition)
                 trans_matrix = np.tile(trans_matrix, (self.N, 1))
 
-            e_t = self._binomialEmission(counts, cov, t)
+            e_t = self.emission_matrix[coverage[t]-1, obs[t]-1]
+     
             tmp = delta[:, t-1] + np.log(trans_matrix)
             delta[:, t] = tmp.max(1) + np.log(e_t)
             psi[:, t] = tmp.argmax(1)
@@ -561,6 +527,59 @@ class Hmm:
 
 
         return best_path, Pkx, ci
+
+    
+    def train(self, pos, obs, cov, maxiter=30, threshold=10e-10, graph=False):
+        '''
+        Train the model using the Baum-Welch algorithm and update the model's
+        current parameters based on a set training observation, a max number of 
+        iteration and a threshold for the likelihood difference between new and
+        current model
+            - maxiter :     maximum number of EM iterations. Default = 100
+            - threshold : minimum value for log-likehood difference between two
+                        iterations. If lower, the EM stops. Default = 10e-10
+            - graph :   plot the LL evolution at the end of the estimation. 
+                        default = True  
+        '''
+
+        print " --- Parameter reestimation ---"
+        # Transition matrix powers pre-calculation
+        self.trans_powers = self._preComputeDistances(self.max_dist)
+
+        # Emission laws pre-calculations
+        self.emission_matrix = self._binomialEmissionPrecalculation(obs, cov)
+
+        initial_transition = self.transition
+        start  = time.time()
+        LLs = []
+        for i in xrange(maxiter):
+            # Print current EM iteration
+            sys.stdout.write("\r   EM Iteration : %i/%i" % (i+1, maxiter))
+            sys.stdout.flush()
+
+            # Run Baum-Welch and store the log-likelihood prob
+            LL = self._baumWelch(pos, obs, cov)
+            LLs.append(LL)
+
+            # # Stop if the LL plateau is reached
+            # if (i > 2):
+            #   if (LLs[-1] - LLs[-2] < threshold):
+            #       print '\nOops, log-likelihood plateau, training stopped'
+            #       break
+        stop = time.time()
+        print "\t... done in %.1f secs" % (stop - start)
+
+        # Plot LL evolution for each iteration
+        # if graph is True:
+        #   from pylab import plot, title, show
+        #   plot(LLs, '+')
+        #   title('Log-likelihood evolution during training')
+        #   show()
+
+        # Compute the KL divergence between initial transition and estimated
+        # transition
+        Dkl = kl_divergence(initial_transition, self.transition)
+        return Dkl, LLs[-1]
 
 
     def decode(self, pos, obs, cov,
@@ -677,6 +696,7 @@ class Hmm:
         else:
             return best_path
 
+
     def generateData(self, coverage, 
         cov_type="real", 
         fix_cov_val = 30, 
@@ -710,10 +730,12 @@ class Hmm:
         'real':None
         }
 
+
+
         self.coverage_type = cov_type
         setattr(self, 'coverage_param', cov_type_table[cov_type])
 
-        counts = np.zeros([seq_length])
+        counts = np.zeros([seq_length], dtype=int)
         gen_path = np.zeros([seq_length])
 
         if verbose:
@@ -742,7 +764,9 @@ class Hmm:
 
         # Sample initial state and initial observation
         gen_path[0] = np.random.choice(self.states, p=self.initial)
-        counts[0] = np.random.binomial(cov[0], gen_path[0], size=1)
+
+        while counts[0] == 0:
+            counts[0] = np.random.binomial(cov[0], gen_path[0], size=1)
 
         # Sample the state paths and the corresponding observations
         for i in xrange(1, seq_length):
@@ -758,10 +782,11 @@ class Hmm:
             gen_path[i] = np.random.choice(self.states, p=curr_trans_dist)
 
             # Sample the observation using a binomial distribution
-            try:
-                counts[i] = np.random.binomial(cov[i], gen_path[i], 1)
-            except:
-                ipdb.set_trace
+            while counts[i] == 0:
+                try:
+                    counts[i] = int(np.random.binomial(cov[i], gen_path[i], 1))
+                except:
+                    ipdb.set_trace
         if verbose:
             simu_end = time.time()
             print "\t...done in %.1f secs" % (simu_end - simu_start)
