@@ -4,13 +4,14 @@ import ipdb
 # Scientific and plotting libraries
 import numpy as np
 from scipy import stats
-import pylab as plb
+
 import matplotlib
+import warnings
+warnings.simplefilter("ignore", np.ComplexWarning)
 
 # Plotting parameters
-plb.rcParams['font.size'] = 10
 matplotlib.rc('axes',edgecolor='#979797')
-matplotlib.rc('font', size=8, family='sans-serif')
+matplotlib.rc('font', size=10)
 
 # HELPER FUNCTIONS
 
@@ -49,7 +50,8 @@ def stationaryDist(matrix):
     mu = mu / np.sum(mu)
     return mu
 
-def maxTransPower(matrix, eps=1e-6):
+
+def maxTransPower(matrix, eps=1e-4):
 # Find the highest power of the transition matrix n such as trans^n - mu < eps
 # This is used for the pre-calculation of the transition matrix powers
 # in order to speed up the forward-backward algorithm
@@ -176,6 +178,10 @@ class Hmm:
 
         self.max_dist = maxTransPower(self.transition)
         self.trans_powers = np.zeros([self.max_dist, self.N, self.N])
+
+        # Computing stationary distribution
+        self.stat_dist = stationaryDist(self.transition)
+        self.stat_dist = np.tile(self.stat_dist, (self.N, 1))
     
     def kl_divergence(self, P, Q):
     # Compute the Kullback-Leibler divergence for two distributions P and Q
@@ -190,20 +196,22 @@ class Hmm:
                 Dkl += fact*(np.log2(P[i,j]/Q[i,j]))
         return Dkl
 
-
+    
     def _preComputeDistances(self, max_n):
     # Pre compute transition matrix powers
 
+        # print " - Precomputing transition matrices (n = %d) -" % max_n
         # We store the matrice in a 3 dimensional matrix
-        dist_mat = np.zeros([max_n, self.N, self.N])
+        dist_mat = np.zeros([max_n-1, self.N, self.N])
 
-        for n in xrange(0, max_n):
-            dist_mat[n,:,:] = np.linalg.matrix_power(self.transition, n)
+        for n in xrange(1, max_n):
+            dist_mat[n-1,:,:] = np.linalg.matrix_power(self.transition, n)
             
             for i in xrange(self.N):
-                dist_mat[n,i,:] /= sum(dist_mat[n,i,:])
-
+                dist_mat[n-1,i,:] /= sum(dist_mat[n-1,i,:])
+        # print "    ... done."
         return dist_mat
+
 
     def conf_interval(self, array, alpha):
 
@@ -251,6 +259,7 @@ class Hmm:
         else:
             print "New initial vector must be stochastic (row must sum to 1)"
 
+    
     def _binomialEmissionPrecalculation(self, obs, coverage):
     # We precalculate all the emission distributions based on max 
     # values of observations and coverage
@@ -261,16 +270,22 @@ class Hmm:
     #             = Binomial(n = c_counts, p = methylation, k = coverage)
 
         max_obs = max(obs)
-        max_cov = max(coverage)
+        max_cov = int(max(coverage))
 
+        print " - Precomputing binomial emission laws - "
+        precom_start = time.time()
         emit_matrix = np.zeros([max_cov, max_obs, self.N])
         for i in xrange(max_cov):
-            for j in xrange(max_obs):
-                emit_matrix[i, j, :] = stats.distributions.binom.pmf(j, i, self.states)
-                emit_matrix[i, j, :] *= 1. / sum(emit_matrix[i, j, :])
+            k = 0
+            while k <= i and k < max_obs:
+                emit_matrix[i, k, :] = stats.distributions.binom.pmf(k, i, self.states)
+                emit_matrix[i, k, :] *= 1. / sum(emit_matrix[i, k, :])
+                k += 1
+        precom_stop = time.time()
 
         # The return vector must be stochastic, so we divide by the sum of its
         # elements 
+        print "   ... done in %.1f secs." % (precom_stop - precom_start)
         return emit_matrix
 
 
@@ -282,8 +297,7 @@ class Hmm:
     ##########################################################################
 
 
-
-    def _forward(self, pos, obs, coverage):
+    def _forward(self, pos, obs, cov):
     # Compute P(observation sequence | state sequence)
     # the forward algorithm and calculate the alpha variable as well as 
     # the observed sequences probability
@@ -301,35 +315,35 @@ class Hmm:
         # we normalize the probabilities using a scaling value while keeping 
         # the recursion coherent 
 
-        e0 = self.emission_matrix[coverage[0] - 1, obs[0] - 1]
+        e0 = self.emission_matrix[cov[0] - 1, obs[0] - 1]
         alpha[:,0] = self.initial * e0
         
         scale[0] = 1. / np.sum(alpha[:,0])
         alpha[:,0] *= scale[0]
+
+
         ### Induction step (recursion)
         for t in xrange(1, T):
 
             # Compute the transition matrix power
             dist = pos[t] - pos[t - 1]
-            if dist <= self.max_dist:
+            if dist < self.max_dist:
                 trans_matrix = self.trans_powers[dist-1,:,:]
             else:
-                trans_matrix = stationaryDist(self.transition)
-                trans_matrix = np.tile(trans_matrix, (self.N, 1))
-            e = self.emission_matrix[coverage[t] - 1, obs[t] - 1]
-            # ipdb.set_trace()
+                trans_matrix = self.stat_dist
+
+            e = self.emission_matrix[cov[t] - 1, obs[t] - 1]
             alpha[:,t] = np.dot(alpha[:,t-1], trans_matrix) * e
+
 
             scale[t] = 1. / np.sum(alpha[:,t])
             alpha[:,t] *= scale[t]
 
         obs_log_prob = - np.sum(np.log(scale))
 
-
         return obs_log_prob, alpha, scale
         
-
-    def _backward(self, pos, obs, coverage, scale):
+    def _backward(self, pos, obs, cov, scale):
         '''
         Run the backward algorithm and calculate the beta variable
         '''
@@ -347,22 +361,21 @@ class Hmm:
 
             # Compute the transition matrix power
             dist = pos[t+1] - pos[t]
-            if dist <= self.max_dist:
+            if dist < self.max_dist:
                 trans_matrix = self.trans_powers[dist-1,:,:]
             else:
-                trans_matrix = stationaryDist(self.transition)
-                trans_matrix = np.tile(trans_matrix, (self.N, 1))
+                trans_matrix = self.stat_dist
 
-            e = self.emission_matrix[coverage[t+1] - 1, obs[t+1] - 1]
+            e = self.emission_matrix[cov[t+1] - 1, obs[t+1] - 1]
             beta[:,t] = np.dot(trans_matrix, (e * beta[:,t+1]))
 
             # Scaling using the forward algorithm scaling factors
             beta[:,t] *= scale[t]
-            beta[:,t] *= 1. / sum(beta[:,t])
+            # beta[:,t] *= 1. / np.sum(beta[:,t])
 
         return beta
-    # @profile
-    def _ksi(self, pos, obs, coverage, alpha, beta):
+    
+    def _ksi(self, pos, obs, cov, alpha, beta):
     # Calculate ksis. 
     # Ksi is a N x N x T-1 matrix
 
@@ -370,15 +383,15 @@ class Hmm:
         ksi = np.zeros([self.N, self.N, T-1])
 
         for t in xrange(T-1):
+
             dist = pos[t+1] - pos[t]
-            if dist <= self.max_dist:
+            if dist < self.max_dist:
                 trans_matrix = self.trans_powers[dist-1,:,:]
             else:
-                trans_matrix = stationaryDist(self.transition)
-                trans_matrix = np.tile(trans_matrix, (self.N, 1))
+                trans_matrix = self.stat_dist
 
             for i in xrange(self.N):
-                e = self.emission_matrix[coverage[t+1] -1, obs[t+1] - 1]
+                e = self.emission_matrix[cov[t+1] -1, obs[t+1] - 1]
                 ksi[i, :, t] = alpha[i, t] * trans_matrix[i, :] * e * beta[:, t+1]
         return ksi
 
@@ -390,18 +403,17 @@ class Hmm:
         gamma /= gamma.sum(0)
         return gamma
 
-
     def _baumWelch(self, pos, obs, cov):
     # Run the Baum-Welch algorithm to estimate new paramters based on 
     # a set of obsercations
     
-        counts = obs
-        coverage = cov
-        T = len(counts)
+        self.trans_powers = self._preComputeDistances(self.max_dist)
+        T = len(obs)
+        cov = cov
         
-        log_obs, alpha, scale = self._forward(pos, counts, coverage)
-        beta = self._backward(pos, counts, coverage, scale)
-        ksi = self._ksi(pos, counts, coverage, alpha, beta)
+        log_obs, alpha, scale = self._forward(pos, obs, cov)
+        beta = self._backward(pos, obs, cov, scale)
+        ksi = self._ksi(pos, obs, cov, alpha, beta)
         gamma = self._gamma(alpha, beta)
 
         # Expectation of being in state i
@@ -416,7 +428,6 @@ class Hmm:
         # Exctation of jumping from state i to state j until T-1
         expect_si_sj_all_TM1 = np.zeros([self.N, self.N], float)
 
-
         expect_si_all += gamma.sum(1)
         expect_si_all_TM1 += gamma[:, :T-1].sum(1)
         expect_si_sj_all += ksi.sum(2)
@@ -424,15 +435,19 @@ class Hmm:
 
         ### Update transition matrix
         new_transition = np.zeros([self.N, self.N])
+
+        
         for i in xrange(self.N):
             new_transition[i,:] = expect_si_sj_all_TM1[i,:] / \
                                 expect_si_all_TM1[i]
 
             new_transition[i] /= sum(new_transition[i])
+
+        Dkl = kl_divergence(self.transition, new_transition)
         self.updateTransition(new_transition)
 
         # Return log likelihood
-        return log_obs
+        return log_obs, Dkl
 
  
     def _viterbiDecode(self, pos, obs, coverage):
@@ -483,21 +498,19 @@ class Hmm:
         return best_path
 
 
-    def _posteriorDecode(self, pos, obs, coverage, ci_alpha):
+    def _posteriorDecode(self, pos, obs, cov, ci_alpha):
         '''
         Find the most probable hidden state sequence using the posterior
         probability and the forward-backward 
         '''
-        
-        counts = obs
-        cov = coverage      
+       
 
-        T = len(counts)
+        T = len(obs)
 
         self.trans_powers = self._preComputeDistances(self.max_dist)
 
-        log_obs, alpha, scale = self._forward(pos, counts, cov)
-        beta = self._backward(pos, counts, cov, scale)
+        log_obs, alpha, scale = self._forward(pos, obs, cov)
+        beta = self._backward(pos, obs, cov, scale)
 
         Pkx = np.zeros([self.N, T])
         ci = np.zeros([2, T])
@@ -528,8 +541,7 @@ class Hmm:
 
         return best_path, Pkx, ci
 
-    
-    def train(self, pos, obs, cov, maxiter=30, threshold=10e-10, graph=False):
+    def train(self, pos, obs, cov, maxiter=30, threshold=10e-10, graph=True):
         '''
         Train the model using the Baum-Welch algorithm and update the model's
         current parameters based on a set training observation, a max number of 
@@ -543,23 +555,27 @@ class Hmm:
         '''
 
         print " --- Parameter reestimation ---"
+
         # Transition matrix powers pre-calculation
-        self.trans_powers = self._preComputeDistances(self.max_dist)
+        
 
         # Emission laws pre-calculations
         self.emission_matrix = self._binomialEmissionPrecalculation(obs, cov)
 
+
         initial_transition = self.transition
         start  = time.time()
         LLs = []
+        Dkls = []
         for i in xrange(maxiter):
             # Print current EM iteration
             sys.stdout.write("\r   EM Iteration : %i/%i" % (i+1, maxiter))
             sys.stdout.flush()
 
             # Run Baum-Welch and store the log-likelihood prob
-            LL = self._baumWelch(pos, obs, cov)
+            LL, Dkl = self._baumWelch(pos, obs, cov)
             LLs.append(LL)
+            Dkls.append(Dkl)
 
             # # Stop if the LL plateau is reached
             # if (i > 2):
@@ -570,16 +586,18 @@ class Hmm:
         print "\t... done in %.1f secs" % (stop - start)
 
         # Plot LL evolution for each iteration
-        # if graph is True:
-        #   from pylab import plot, title, show
-        #   plot(LLs, '+')
-        #   title('Log-likelihood evolution during training')
-        #   show()
+        if graph is True:
+            import pylab as plb
+            plb.plot(LLs, '+')
+            plb.twinx()
+            plb.plot(Dkls, '+', color="red")
+            plb.title('Log-likelihood evolution during training')
+            plb.show()
 
         # Compute the KL divergence between initial transition and estimated
         # transition
-        Dkl = kl_divergence(initial_transition, self.transition)
-        return Dkl, LLs[-1]
+        
+        return Dkl, LLs
 
 
     def decode(self, pos, obs, cov,
@@ -646,11 +664,12 @@ class Hmm:
 
         # Plotting routines
         if graph is not False:
+            import pylab as plb
             fig = plb.figure(figsize=(16,2.5), dpi=100)
             if self.coverage_type is not "fixed":
                 plb.subplot(111)
-            plb.plot(pos, best_path, '-', color="#B23927",
-                alpha=.8, lw=1.5,
+            plb.plot(pos, best_path, '+', color="#B23927",
+                alpha=1, lw=1.5,
                 label="Estimation")
 
             plb.ylabel('Methylation probability')
@@ -673,7 +692,7 @@ class Hmm:
                     ''' % (self.coverage_type, self.coverage_param,))
             # IF we are dealing with simulated data
             if real_path is not None:
-                plb.plot(pos, real_path, '-', 
+                plb.plot(pos, real_path, '+', 
                     color="#3892E3", 
                     label="Simulation")
             plb.legend()
@@ -687,7 +706,6 @@ class Hmm:
             #     plb.legend()
 
             plb.show()
-            plb.savefig("figure.pdf", transparent=True)
 
         # Return accordingly
         if method=="posterior" and real_path is not None:
@@ -696,7 +714,7 @@ class Hmm:
         else:
             return best_path
 
-
+    
     def generateData(self, coverage, 
         cov_type="real", 
         fix_cov_val = 30, 
@@ -745,7 +763,8 @@ class Hmm:
         # Simulating coverage dat
 
         if cov_type == "real":
-            print "      - using real coverage data"
+            if verbose is True:
+                print "      - using real coverage data"
             cov = coverage
 
         elif cov_type == "fixed":
