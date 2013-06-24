@@ -11,7 +11,7 @@ warnings.simplefilter("ignore", np.ComplexWarning)
 
 # Plotting parameters
 matplotlib.rc('axes',edgecolor='#979797')
-matplotlib.rc('font', size=10)
+matplotlib.rc('font', size=8)
 
 # HELPER FUNCTIONS
 
@@ -167,6 +167,7 @@ class Hmm:
 
         if stoch_check(transition):
             self.transition = transition
+            self.initial_transition = transition
         else:
             print "Transition matrix must be stochastic (rows must sum to 1)"
 
@@ -272,8 +273,8 @@ class Hmm:
         max_obs = max(obs)
         max_cov = int(max(coverage))
 
-        print " - Precomputing binomial emission laws - "
-        precom_start = time.time()
+        # print " - Precomputing binomial emission laws - "
+        # precom_start = time.time()
         emit_matrix = np.zeros([max_cov, max_obs, self.N])
         for i in xrange(max_cov):
             k = 0
@@ -281,11 +282,11 @@ class Hmm:
                 emit_matrix[i, k, :] = stats.distributions.binom.pmf(k, i, self.states)
                 emit_matrix[i, k, :] *= 1. / sum(emit_matrix[i, k, :])
                 k += 1
-        precom_stop = time.time()
+        # precom_stop = time.time()
 
         # The return vector must be stochastic, so we divide by the sum of its
         # elements 
-        print "   ... done in %.1f secs." % (precom_stop - precom_start)
+        # print "   ... done in %.1f secs." % (precom_stop - precom_start)
         return emit_matrix
 
 
@@ -328,7 +329,7 @@ class Hmm:
             # Compute the transition matrix power
             dist = pos[t] - pos[t - 1]
             if dist < self.max_dist:
-                trans_matrix = self.trans_powers[dist-1,:,:]
+                trans_matrix = np.linalg.matrix_power(self.transition, dist)
             else:
                 trans_matrix = self.stat_dist
 
@@ -362,7 +363,7 @@ class Hmm:
             # Compute the transition matrix power
             dist = pos[t+1] - pos[t]
             if dist < self.max_dist:
-                trans_matrix = self.trans_powers[dist-1,:,:]
+                trans_matrix = np.linalg.matrix_power(self.transition, dist)
             else:
                 trans_matrix = self.stat_dist
 
@@ -371,7 +372,7 @@ class Hmm:
 
             # Scaling using the forward algorithm scaling factors
             beta[:,t] *= scale[t]
-            # beta[:,t] *= 1. / np.sum(beta[:,t])
+            beta[:,t] *= 1. / np.sum(beta[:,t])
 
         return beta
     
@@ -386,7 +387,7 @@ class Hmm:
 
             dist = pos[t+1] - pos[t]
             if dist < self.max_dist:
-                trans_matrix = self.trans_powers[dist-1,:,:]
+                trans_matrix = np.linalg.matrix_power(self.transition, dist)
             else:
                 trans_matrix = self.stat_dist
 
@@ -402,52 +403,6 @@ class Hmm:
         gamma = alpha * beta 
         gamma /= gamma.sum(0)
         return gamma
-
-    def _baumWelch(self, pos, obs, cov):
-    # Run the Baum-Welch algorithm to estimate new paramters based on 
-    # a set of obsercations
-    
-        self.trans_powers = self._preComputeDistances(self.max_dist)
-        T = len(obs)
-        cov = cov
-        
-        log_obs, alpha, scale = self._forward(pos, obs, cov)
-        beta = self._backward(pos, obs, cov, scale)
-        ksi = self._ksi(pos, obs, cov, alpha, beta)
-        gamma = self._gamma(alpha, beta)
-
-        # Expectation of being in state i
-        expect_si_all = np.zeros([self.N], float)
-
-        # Expectation of being in state i until T-1
-        expect_si_all_TM1 = np.zeros([self.N], float)
-
-        # Exctation of jumping from state i to state j
-        expect_si_sj_all = np.zeros([self.N, self.N], float)
-
-        # Exctation of jumping from state i to state j until T-1
-        expect_si_sj_all_TM1 = np.zeros([self.N, self.N], float)
-
-        expect_si_all += gamma.sum(1)
-        expect_si_all_TM1 += gamma[:, :T-1].sum(1)
-        expect_si_sj_all += ksi.sum(2)
-        expect_si_sj_all_TM1 += ksi[:, :, :T-1].sum(2) 
-
-        ### Update transition matrix
-        new_transition = np.zeros([self.N, self.N])
-
-        
-        for i in xrange(self.N):
-            new_transition[i,:] = expect_si_sj_all_TM1[i,:] / \
-                                expect_si_all_TM1[i]
-
-            new_transition[i] /= sum(new_transition[i])
-
-        Dkl = kl_divergence(self.transition, new_transition)
-        self.updateTransition(new_transition)
-
-        # Return log likelihood
-        return log_obs, Dkl
 
  
     def _viterbiDecode(self, pos, obs, coverage):
@@ -507,7 +462,7 @@ class Hmm:
 
         T = len(obs)
 
-        self.trans_powers = self._preComputeDistances(self.max_dist)
+        # self.trans_powers = self._preComputeDistances(self.max_dist)
 
         log_obs, alpha, scale = self._forward(pos, obs, cov)
         beta = self._backward(pos, obs, cov, scale)
@@ -541,7 +496,57 @@ class Hmm:
 
         return best_path, Pkx, ci
 
-    def train(self, pos, obs, cov, maxiter=30, threshold=10e-10, graph=True):
+    def _baumWelch(self, pos, obs, cov, noupdate=False, real_param=None):
+        # Run the Baum-Welch algorithm to estimate new paramters based on 
+        # a set of obsercations
+        
+            
+            T = len(obs)
+            cov = cov
+            self.trans_powers = self._preComputeDistances(self.max_dist)
+
+            log_obs, alpha, scale = self._forward(pos, obs, cov)
+            beta = self._backward(pos, obs, cov, scale)
+            ksi = self._ksi(pos, obs, cov, alpha, beta)
+            gamma = self._gamma(alpha, beta)
+
+            # Expectation of being in state i
+            expect_si_all = np.zeros([self.N], float)
+
+            # Expectation of being in state i until T-1
+            expect_si_all_TM1 = np.zeros([self.N], float)
+
+            # Expectation of jumping from state i to state j
+            expect_si_sj_all = np.zeros([self.N, self.N], float)
+
+            # Expectation of jumping from state i to state j until T-1
+            expect_si_sj_all_TM1 = np.zeros([self.N, self.N], float)
+
+            expect_si_all += gamma.sum(1)
+            expect_si_all_TM1 += gamma[:, :T-1].sum(1)
+            expect_si_sj_all += ksi.sum(2)
+            expect_si_sj_all_TM1 += ksi[:, :, :T-1].sum(2) 
+
+            ### Update transition matrix
+            new_transition = np.zeros([self.N, self.N])
+
+            
+            for i in xrange(self.N):
+                new_transition[i,:] = expect_si_sj_all_TM1[i,:] / \
+                                    expect_si_all_TM1[i]
+
+                new_transition[i] /= sum(new_transition[i])
+
+            Dkl = kl_divergence(real_param, new_transition)
+
+            if not noupdate:
+                self.updateTransition(new_transition)
+                return log_obs, Dkl
+            else:
+                return log_obs, Dkl, new_transition
+
+    @profile
+    def train(self, pos, obs, cov, maxiter=30, threshold=10e-2, graph=True, real_param = None):
         '''
         Train the model using the Baum-Welch algorithm and update the model's
         current parameters based on a set training observation, a max number of 
@@ -556,47 +561,98 @@ class Hmm:
 
         print " --- Parameter reestimation ---"
 
-        # Transition matrix powers pre-calculation
-        
 
         # Emission laws pre-calculations
         self.emission_matrix = self._binomialEmissionPrecalculation(obs, cov)
 
 
         initial_transition = self.transition
+
+        # Find the best initial transition by running 10 succesives 
+        # EMs with 3 iterations each, and select the one with the best 
+        # likelihood.
+
+        # print "    - Searching for best initial parameter"
+        # best_LL = - float("inf")
+        # for i in xrange(2):
+        #     for j in xrange(2):
+        #         sys.stdout.write("\r   Run/Iter : %i/%i, LL=%.3f" % (i+1,j+1, best_LL))
+        #         sys.stdout.flush()
+        #         LL, Dkl, new_trans = self._baumWelch(pos, obs, cov, 
+        #             noupdate=True)
+         
+        #     if LL > best_LL:
+        #         best_LL = LL
+        #         best_init_trans = new_trans
+
+
+        # print "           ...done with likelihood = %.3f" % best_LL
+
+        # self.transition = best_init_trans
+
         start  = time.time()
-        LLs = []
+        LLs = [0, 0]
         Dkls = []
+        LL_diffs = [0, 0]
+
+        # Initialization of plots
+        if graph is True:
+            import pylab as plb
+            fig2 = plb.figure(figsize=(12,2.5), dpi=100)
+
+            plb.subplot(141)
+            plb.title('Log-likelihood')
+            plb.xlim(-1,maxiter)
+
+            plb.subplot(142)
+            plb.title('Relative entropy')
+            plb.xlim(-1, maxiter)
+
+            plb.subplot(143)
+            plb.pcolor(self.transition, cmap="Reds")
+            plb.title('Transition matrix (estimated)')
+            plb.xlim(0,11)
+            plb.ylim(0,11)
+
+            plb.subplot(144)
+            plb.pcolor(real_param, cmap="Reds")
+            plb.title("Real parameter")
+            plb.xlim(0,11)
+            plb.ylim(0,11)
+
+            plb.ion()
+            plb.show()
+
         for i in xrange(maxiter):
             # Print current EM iteration
             sys.stdout.write("\r   EM Iteration : %i/%i" % (i+1, maxiter))
             sys.stdout.flush()
 
             # Run Baum-Welch and store the log-likelihood prob
-            LL, Dkl = self._baumWelch(pos, obs, cov)
+            LL, Dkl = self._baumWelch(pos, obs, cov, real_param=real_param)
             LLs.append(LL)
+            LL_diff = LLs[-1] - LLs[-2]
+            LL_diffs.append(LL_diff)
             Dkls.append(Dkl)
 
-            # # Stop if the LL plateau is reached
-            # if (i > 2):
-            #   if (LLs[-1] - LLs[-2] < threshold):
-            #       print '\nOops, log-likelihood plateau, training stopped'
-            #       break
+            # Stop if the LL plateau is reached (LL evolution < threshold)
+            if (i > 2):
+              if abs(LL_diff) < threshold:
+                  print '\nOops, log-likelihood plateau, training stopped'
+                  break
+
+            if graph is True:
+                plb.subplot(141)
+                plb.scatter(i, LL, marker='+')
+                plb.subplot(142)
+                plb.scatter(i, Dkl, marker='+')
+                plb.subplot(143)
+                plb.pcolor(self.transition, cmap="Reds")
+                plb.draw()
+
         stop = time.time()
-        print "\t... done in %.1f secs" % (stop - start)
+        print "\n\t... done in %.1f secs" % (stop - start)
 
-        # Plot LL evolution for each iteration
-        if graph is True:
-            import pylab as plb
-            plb.plot(LLs, '+')
-            plb.twinx()
-            plb.plot(Dkls, '+', color="red")
-            plb.title('Log-likelihood evolution during training')
-            plb.show()
-
-        # Compute the KL divergence between initial transition and estimated
-        # transition
-        
         return Dkl, LLs
 
 
@@ -624,6 +680,9 @@ class Hmm:
         verbose:
                 If True, print the running time and the current processed task
         '''
+
+        self.emission_matrix = self._binomialEmissionPrecalculation(obs, cov)
+
 
         # Call the selected algorithm for decoding
         if method=="posterior":
@@ -666,9 +725,11 @@ class Hmm:
         if graph is not False:
             import pylab as plb
             fig = plb.figure(figsize=(16,2.5), dpi=100)
+
             if self.coverage_type is not "fixed":
-                plb.subplot(111)
-            plb.plot(pos, best_path, '+', color="#B23927",
+                plb.subplot(121)
+
+            plb.plot(pos, best_path, '-', color="#B23927",
                 alpha=1, lw=1.5,
                 label="Estimation")
 
@@ -690,20 +751,21 @@ class Hmm:
                 plb.title('''
                     Viterbi path (Coverage %s, param: %s)
                     ''' % (self.coverage_type, self.coverage_param,))
+
             # IF we are dealing with simulated data
             if real_path is not None:
-                plb.plot(pos, real_path, '+', 
+                plb.plot(pos, real_path, '-', 
                     color="#3892E3", 
                     label="Simulation")
             plb.legend()
 
-            # if self.coverage_type is not "fixed":
-            #     plb.subplot(122)
-            #     plb.plot(pos, cov, '-', color='#3892E3', label="Coverage")
-            #     plb.plot(pos, obs, '-', color='#B23927', label="C-C matches")
-            #     plb.xlim(min(pos), max(pos))
-            #     plb.title('Coverage depth and C-C matches counting')
-            #     plb.legend()
+            if self.coverage_type is not "fixed":
+                plb.subplot(122)
+                plb.plot(pos, cov, '-', color='#3892E3', label="Coverage")
+                plb.plot(pos, obs, '-', color='#B23927', label="C-C matches")
+                plb.xlim(min(pos), max(pos))
+                plb.title('Coverage depth and C-C matches counting')
+                plb.legend()
 
             plb.show()
 
@@ -747,8 +809,6 @@ class Hmm:
         'poisson':lam,
         'real':None
         }
-
-
 
         self.coverage_type = cov_type
         setattr(self, 'coverage_param', cov_type_table[cov_type])
